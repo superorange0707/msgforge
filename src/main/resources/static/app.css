@@ -201,10 +201,10 @@ form.send-card .seg { display: grid; }
 .run .sub { display: flex; justify-content: space-between; gap: 10px; font: 11.5px var(--mono); color: var(--muted); }
 .run .sub span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run .sub span:last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.checks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
-.check { display: flex; justify-content: space-between; gap: 10px; min-width: 0; font: 11.5px var(--mono); color: var(--muted); }
-.check span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.check .tally { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.checks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.check { display: flex; flex-wrap: wrap; gap: 1px 10px; min-width: 0; font: 11.5px/1.45 var(--mono); color: var(--muted); }
+.check span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.check .tally { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .check b { font-weight: inherit; color: var(--bad); }
 .result, .run .error { padding: 8px 10px; border-radius: 8px; font: 11.5px/1.5 var(--mono); word-break: break-word; }
 .run .error { margin-top: 9px; }
@@ -253,7 +253,7 @@ h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
 .ask p { margin: -6px 0 0; color: var(--muted); }
 
 /* ---- popover & toast */
-.menu { position: fixed; z-index: 20; width: 264px; max-height: 340px; overflow: auto; padding: 6px; border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: 0 24px 60px -16px rgba(0, 30, 60, .55); animation: rise .14s ease; }
+.menu { position: fixed; z-index: 20; width: 264px; max-height: min(560px, calc(100vh - 80px)); overflow: auto; padding: 6px; border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: 0 24px 60px -16px rgba(0, 30, 60, .55); animation: rise .14s ease; }
 .menu h6 { margin: 0; padding: 8px 8px 4px; font: 650 10px var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
 .menu button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: 7px; background: none; text-align: left; font: 12px var(--mono); }
 .menu button:hover, .menu button:focus-visible { background: var(--accent-soft); color: var(--accent); outline: 0; }

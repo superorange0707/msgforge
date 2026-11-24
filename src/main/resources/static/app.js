@@ -700,8 +700,8 @@ function renderRuns() {
     row.querySelector('.x').hidden = ended;
     const checks = row.querySelector('.checks'); checks.hidden = !r.checks.length;
     checks.replaceChildren(...r.checks.map(c => {
-      const line = el('div', 'check'), where = el('span', '', c.template + ' → ' + c.expected), tally = el('span', 'tally', c.arrived + ' / ' + c.sent);
-      where.title = where.textContent;
+      // where it was expected is what a failed check is read for, so it is never cut short: the tally moves to a line of its own instead
+      const line = el('div', 'check'), where = el('span', '', (r.templates.length > 1 ? c.template + ' ' : '') + '→ ' + c.expected), tally = el('span', 'tally', c.arrived + ' / ' + c.sent);
       // until the run ends a message that has not arrived is only late, so the counts are not shown as errors yet
       if (ended && c.misrouted) tally.append(el('b', '', ' · ' + c.misrouted + ' misrouted'));
       if (ended && c.missing) tally.append(el('b', '', ' · ' + c.missing + ' missing'));
