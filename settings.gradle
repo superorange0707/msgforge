@@ -1,0 +1,7 @@
+plugins {
+    // Lets Gradle fetch JDK 17 for the toolchain when the machine only has another version.
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'msgforge'
+include 'extensions:kafka'

@@ -1,0 +1,1 @@
+{{uuid}},{{now}},{{site}},sensor-{{int 1 40}},temperature,{{decimal 15 30 1}}

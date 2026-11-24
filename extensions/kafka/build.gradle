@@ -1,0 +1,48 @@
+// A msgforge plugin: builds one jar that carries the Kafka client with it.
+// `./gradlew :extensions:kafka:installPlugin` puts it in plugins/, where msgforge picks it up at start.
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+group = 'io.msgforge'
+version = rootProject.version
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories { mavenCentral() }
+
+dependencyManagement {
+    imports { mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES }
+}
+
+dependencies {
+    compileOnly project(':')                          // TransportType is provided by msgforge at run time
+    implementation('org.apache.kafka:kafka-clients') {
+        exclude group: 'org.slf4j'                    // logging goes through msgforge's own slf4j
+    }
+
+    testImplementation project(':')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test { useJUnitPlatform() }
+
+jar {
+    archiveBaseName = 'msgforge-kafka'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // The jar travels on its own too, so it says itself what it carries. LICENSE and NOTICE at its root are Kafka's.
+    from(rootProject.file('THIRD-PARTY.md')) { into 'META-INF' }
+    doFirst { rootProject.bundledJars(configurations.runtimeClasspath) }
+    from({ configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class'
+    }
+}
+
+tasks.register('installPlugin', Copy) {
+    from jar
+    into rootProject.file('plugins')
+}

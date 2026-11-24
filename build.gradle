@@ -1,0 +1,88 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.16'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'io.msgforge'
+version = '0.1.0'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework:spring-jms'
+    implementation 'jakarta.jms:jakarta.jms-api'
+    implementation 'com.ibm.mq:com.ibm.mq.jakarta.client:9.4.5.1'
+    implementation 'org.yaml:snakeyaml'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.apache.activemq:artemis-jakarta-server'
+    testImplementation 'org.apache.activemq:artemis-jakarta-client'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    // The tests load the Kafka plugin the way an installation does: from its built jar, through its own class loader.
+    def kafkaPlugin = file("extensions/kafka/build/libs/msgforge-kafka-${version}.jar")
+    dependsOn ':extensions:kafka:jar'
+    inputs.file kafkaPlugin
+    systemProperty 'msgforge.test.kafkaPlugin', kafkaPlugin.path
+}
+
+// Serve the console straight from src/ during bootRun, so a UI edit shows on reload.
+bootRun { sourceResources sourceSets.main }
+
+bootJar {
+    metaInf { from 'LICENSE', 'NOTICE', 'THIRD-PARTY.md' }
+    doFirst { bundledJars(configurations.runtimeClasspath) }
+}
+
+// The jars a release carries from a classpath. THIRD-PARTY.md has to name each one: a dependency that arrives
+// without being named there stops the build, instead of shipping without its licence being looked at.
+ext.bundledJars = { Configuration classpath ->
+    def jars = classpath.resolvedConfiguration.resolvedArtifacts
+            // Spring Boot's own starters hold no code and are not packaged
+            .findAll { !(it.moduleVersion.id.group == 'org.springframework.boot' && it.name.startsWith('spring-boot-starter')) }
+    def named = file('THIRD-PARTY.md').text
+    def unnamed = jars*.name.findAll { !named.contains("`${it}`") }
+    if (unnamed) throw new GradleException("THIRD-PARTY.md does not name: ${unnamed.join(', ')}")
+    jars*.file
+}
+
+// What a release ships: one zip that works where it is unpacked, with the bundled packs and the Kafka plugin in place.
+//   ./gradlew dist   ->   build/distributions/msgforge-<version>.zip, started with bin/msgforge
+tasks.register('dist', Zip) {
+    group = 'distribution'
+    description = 'Builds the release zip: the application, packs/, plugins/ with the Kafka plugin, and a start script.'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    dependsOn ':extensions:kafka:jar'
+    into("msgforge-${version}") {
+        from(bootJar) { rename { 'msgforge.jar' } }   // one name, so the start script and the Dockerfile need no version
+        from('README.md', 'LICENSE', 'NOTICE', 'THIRD-PARTY.md')
+        // The licence and notice files each bundled jar brings, readable without unpacking the application.
+        bundledJars(configurations.runtimeClasspath).each { jar ->
+            from(zipTree(jar)) {
+                include 'META-INF/LICENSE*', 'META-INF/license*', 'META-INF/NOTICE*', 'META-INF/notice*', 'META-INF/*LICENSE'
+                eachFile { path = "msgforge-${version}/licenses/${jar.name - '.jar'}/${name}" }
+                includeEmptyDirs = false
+            }
+        }
+        from(zipTree("extensions/kafka/build/libs/msgforge-kafka-${version}.jar")) {
+            include 'NOTICE'
+            into 'licenses/kafka-clients'
+        }
+        from('docs') { into 'docs' }   // the README's screenshot
+        from('packs') { into 'packs' }
+        from("extensions/kafka/build/libs/msgforge-kafka-${version}.jar") { into 'plugins' }
+        from('src/dist/bin') {
+            into 'bin'
+            filePermissions { unix('rwxr-xr-x') }
+        }
+    }
+}

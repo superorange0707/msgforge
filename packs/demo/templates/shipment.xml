@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ShipmentNotice xmlns="urn:example:shipment:1">
+  <ShipmentId>{{ref=uuid}}</ShipmentId>
+  <Created>{{now}}</Created>
+  <Carrier>{{carrier}}</Carrier>
+  <TrackingNumber>{{alnum 12}}</TrackingNumber>
+  <ShipTo country="{{pick GB DE NL}}">{{customer}}</ShipTo>
+  <Parcels>{{int 1 5}}</Parcels>
+  <WeightKg>{{decimal 0.5 30 1}}</WeightKg>
+  <Label>{{ref}}</Label>
+</ShipmentNotice>

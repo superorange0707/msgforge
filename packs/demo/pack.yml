@@ -1,0 +1,8 @@
+# Three small messages in three formats. The fields below are shared by the templates:
+# a template writes {{customer}}, and a run can fix one for all its messages (Overrides: carrier=Blue Harbor).
+name: Demo
+fields:
+  customer: '{{pick "Ada Lovelace" "Alan Turing" "Grace Hopper" "Edsger Dijkstra"}}'
+  currency: '{{pick GBP EUR USD}}'
+  carrier: '{{pick "Northwind Freight" "Blue Harbor" "Kestrel Express"}}'
+  site: '{{pick north-1 south-2 east-3}}'

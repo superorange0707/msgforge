@@ -1,0 +1,9 @@
+{
+  "orderId": "{{uuid}}",
+  "sequence": {{seq}},
+  "createdAt": "{{now}}",
+  "customer": "{{customer}}",
+  "items": {{int 1 9}},
+  "total": {{decimal 5 500}},
+  "currency": "{{currency}}"
+}

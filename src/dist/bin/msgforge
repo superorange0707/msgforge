@@ -1,0 +1,11 @@
+#!/bin/sh
+# Starts msgforge from the folder it was unpacked into, whatever the current directory is,
+# so packs/, plugins/ and msgforge.json are the ones next to it. Arguments go to msgforge.
+cd "$(dirname "$0")/.." || exit 1
+java="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+# An older Java fails with a class file version number; say what is needed instead.
+if ! "$java" -version 2>&1 | grep -Eq 'version "(1[7-9]|[2-9][0-9])'; then
+    echo "msgforge needs Java 17 or newer. Install one, or point JAVA_HOME at one." >&2
+    exit 1
+fi
+exec "$java" -jar msgforge.jar "$@"

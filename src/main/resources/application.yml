@@ -1,0 +1,10 @@
+server:
+  address: 127.0.0.1   # no login: keep it off the network. A container sets SERVER_ADDRESS=0.0.0.0 behind its own access control.
+  port: ${PORT:8585}
+
+msgforge:
+  packs: packs           # comma-separated folders; new packs are created in the first one  (env: MSGFORGE_PACKS)
+  config: msgforge.json  # connections and destinations saved from the console             (env: MSGFORGE_CONFIG)
+  plugins: plugins       # jars here add connection types and generators                   (env: MSGFORGE_PLUGINS)
+  allowed-hosts: ""      # extra host names the console answers to, or * for any; localhost always (env: MSGFORGE_ALLOWED_HOSTS)
+  env-allow: ""          # environment variables a connection may name besides MSGFORGE_*, e.g. MQ_*,KAFKA_*  (env: MSGFORGE_ENV_ALLOW)
