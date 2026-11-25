@@ -5,8 +5,12 @@ const state = {
   packs: [], pack: null, name: null, saved: '',
   types: [], connections: [], targets: [{ connection: null, destination: null }], mode: 'spread',
   expect: { on: false, connection: null, destination: null, timeout: 10, match: '' },
+  load: { on: false, rampUp: '', duration: '', senders: '', seed: '', unlimited: false },
+  invalid: { on: false, percent: 5, kinds: null, connection: '', destination: null },
+  raw: false, monitors: [], open: null,
   messages: [], picked: null, runs: [], sentTab: false, scenarios: [], generators: [],
 };
+const KINDS = [['empty', 'Empty'], ['garbage', 'Garbage'], ['truncated', 'Truncated'], ['field-removed', 'Field removed'], ['type-changed', 'Type changed']];
 
 const ICONS = {
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/>',
@@ -25,6 +29,11 @@ const ICONS = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   wand: '<path d="m4 20 10.5-10.5"/><path d="M15 3v3M13.5 4.5h3M20 9v2.4M18.8 10.2h2.4M8.5 4v2M7.5 5h2"/>',
   sliders: '<path d="M4 6h8M16 6h4M4 12h2M10 12h10M4 18h10M18 18h2"/><circle cx="14" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/>',
+  gauge: '<path d="M4.5 18a9 9 0 1 1 15 0"/><path d="m12 13 4-5"/><circle cx="12" cy="13" r="1.2"/>',
+  alert: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.3"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  archive: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/>',
+  download: '<path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/>',
 };
 const icon = name => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(e => e.insertAdjacentHTML('afterbegin', icon(e.dataset.icon)));
@@ -343,6 +352,7 @@ const previewSoon = () => { clearTimeout(previewTimer); previewTimer = setTimeou
 async function preview() {
   const out = $('preview');
   if (!state.pack) { out.textContent = ''; out.dataset.raw = ''; return; }
+  if (state.raw) { out.dataset.raw = src.value; out.textContent = src.value; out.classList.remove('err'); return; }   // as typed is what goes out
   try {
     const text = (await api('/preview', json({ pack: state.pack, body: src.value, vars: vars() }))).rendered;
     out.dataset.raw = text; out.innerHTML = highlight(text, langOf(state.name, text)); out.classList.remove('err');
@@ -366,7 +376,7 @@ const connOf = id => state.connections.find(c => c.id === id);
 const pressed = (button, on) => { button.classList.toggle('on', on); button.setAttribute('aria-pressed', on); };
 const NEW_DESTINATION = ' new';   // saved destinations are trimmed, so a leading space cannot clash with one
 function remember() {
-  try { localStorage.setItem('send', JSON.stringify({ targets: state.targets, mode: state.mode, expect: state.expect, count: $('count').value, rate: $('rate').value })); } catch (_) {}
+  try { localStorage.setItem('send', JSON.stringify({ targets: state.targets, mode: state.mode, expect: state.expect, load: state.load, invalid: state.invalid, count: $('count').value, rate: $('rate').value })); } catch (_) {}
 }
 async function loadConnections() {
   [state.types, state.connections] = await Promise.all([state.types.length ? state.types : api('/types'), api('/connections')]);
@@ -420,6 +430,7 @@ function renderExpect() {
   if (!list.length) x.on = false;
   $('verify').disabled = !list.length; $('verify').setAttribute('aria-pressed', x.on);
   box.hidden = !x.on; box.replaceChildren();   // emptied while off, so a hidden required control cannot block Send
+  renderInvalid();
   if (!x.on) return;
   if (!list.some(c => c.id === x.connection)) x.connection = list[0].id;
   const dests = connOf(x.connection).destinations;
@@ -438,6 +449,59 @@ function renderExpect() {
   box.append(field('Arrives on', cSel), field('Destination', dSel), row);
 }
 const expectation = () => state.expect.on ? { connection: state.expect.connection, destination: state.expect.destination } : null;
+
+// The load plan and the invalid share: two blocks that stay folded away until asked for.
+const whole = v => v === '' || v == null || isNaN(+v) ? null : Math.trunc(+v);
+function renderLoad() {
+  const l = state.load;
+  pressed($('loadToggle'), l.on); $('load').hidden = !l.on;
+  for (const [id, key] of [['rampUp', 'rampUp'], ['duration', 'duration'], ['senders', 'senders'], ['seed', 'seed']]) if ($(id).value !== String(l[key])) $(id).value = l[key];
+  const endless = l.on && l.unlimited;
+  pressed($('unlimited'), l.unlimited);
+  $('count').disabled = $('duration').disabled = endless;   // an endless run has neither
+}
+function kindButtons(box, chosen, changed) {
+  box.replaceChildren(...KINDS.map(([id, label]) => {
+    const b = el('button', '', label); b.type = 'button'; b.setAttribute('aria-pressed', chosen().includes(id));
+    b.onclick = () => { const now = chosen().includes(id) ? chosen().filter(k => k !== id) : [...chosen(), id]; if (now.length) { changed(now); b.setAttribute('aria-pressed', now.includes(id)); } };
+    return b;
+  }));
+}
+// Where the invalid messages should arrive, offered once the run verifies at all: a reject queue, or nowhere.
+function arriveOn(box, where, changed) {
+  const cSel = el('select'), dSel = el('select'), known = receivers();
+  cSel.append(new Option('Invalid arrive nowhere', ''), ...known.map(c => new Option('Invalid arrive on ' + c.name, c.id))); withMissing(cSel, where.connection);
+  cSel.value = where.connection || ''; cSel.setAttribute('aria-label', 'Where invalid messages arrive');
+  cSel.onchange = () => { where.connection = cSel.value; where.destination = null; changed(); };
+  box.replaceChildren(cSel);
+  if (!where.connection) return;
+  const dests = connOf(where.connection)?.destinations || [];
+  if (!where.destination) where.destination = dests[0] || null;
+  dSel.append(...dests.map(d => new Option(d, d))); withMissing(dSel, where.destination); if (!dSel.options.length) dSel.append(new Option('No destinations yet', ''));
+  dSel.value = where.destination || ''; dSel.required = true; dSel.setAttribute('aria-label', 'Destination for invalid messages');
+  dSel.onchange = () => { where.destination = dSel.value || null; remember(); };
+  box.append(dSel);
+}
+function renderInvalid() {
+  const v = state.invalid;
+  if (!v.kinds || !v.kinds.length) v.kinds = KINDS.map(k => k[0]);
+  pressed($('invalidToggle'), v.on); $('invalid').hidden = !v.on;
+  $('invalidPercent').value = v.percent; $('invalidOut').textContent = v.percent + '%';
+  kindButtons($('invalidKinds'), () => v.kinds, now => { v.kinds = now; remember(); });
+  const box = $('invalidExpect'); box.hidden = !(v.on && state.expect.on); box.replaceChildren();
+  if (box.hidden) return;
+  const cField = el('label', 'field'), dField = el('label', 'field'), holder = el('div');
+  arriveOn(holder, v, () => { renderInvalid(); remember(); });
+  const [cSel, dSel] = holder.children;
+  cField.append(el('span', '', 'Invalid arrive on'), cSel); cSel.options[0].text = 'Nowhere'; [...cSel.options].slice(1).forEach(o => o.text = o.text.replace('Invalid arrive on ', ''));
+  box.append(cField);
+  if (dSel) { dField.append(el('span', '', 'Destination'), dSel); box.append(dField); }
+}
+const loadPlan = () => state.load.on ? { rampUpSeconds: whole(state.load.rampUp), durationSeconds: state.load.unlimited ? null : whole(state.load.duration),
+  senders: whole(state.load.senders), unlimited: state.load.unlimited || null } : null;
+const invalidShare = () => state.invalid.on && state.invalid.percent > 0 ? { percent: state.invalid.percent, kinds: state.invalid.kinds,
+  expect: state.expect.on && state.invalid.connection ? { connection: state.invalid.connection, destination: state.invalid.destination } : null } : null;
+const seed = () => state.load.on ? whole(state.load.seed) : null;
 function paintLeds() {   // separate from renderTargets so the once-a-second refresh never rebuilds an open dropdown
   document.querySelectorAll('#targets .led').forEach(led => {
     const last = state.runs.find(r => r.targets.some(t => t.connectionId === led.dataset.conn));
@@ -457,18 +521,20 @@ async function send(ev) {
   ev.preventDefault();
   if (!state.name) return toast('Pick a template first.', true);
   try {
-    await api('/runs', json({
+    const run = await api('/runs', json({
       pack: state.pack, template: state.name, body: src.value, targets: state.targets, mode: state.mode,
-      count: +$('count').value, rate: +$('rate').value || 0, vars: vars(), headers: kv($('headers').value),
+      count: state.load.on && state.load.unlimited ? 0 : +$('count').value, rate: +$('rate').value || 0, vars: vars(), headers: kv($('headers').value),
       expect: expectation(), timeoutSeconds: state.expect.on ? state.expect.timeout : null, match: state.expect.on && state.expect.match.trim() || null,
+      load: loadPlan(), invalid: invalidShare(), seed: seed(), raw: state.raw || null,
     }));
     refresh();
+    if (state.load.on) openRun(run.id);   // a load run is watched, not waited for
   } catch (e) { toast(e.message, true); }
 }
 
 // ---- connections: the settings dialog
 let editing = null;
-const blankConnection = () => ({ id: null, name: '', type: (state.types.find(t => t.fields.length) || state.types[0]).id, settings: {}, secretsSet: [], destinations: [] });
+const blankConnection = () => ({ id: null, name: '', type: (state.types.find(t => t.id !== 'dry-run' && t.fields.length) || state.types[0]).id, settings: {}, secretsSet: [], destinations: [] });
 function openSettings() {
   editing = structuredClone(connOf(state.targets[0].connection) || blankConnection());
   renderConnList(); renderConnForm();
@@ -564,6 +630,29 @@ async function deleteConnection() {
   } catch (err) { showResult(false, err.message); }
 }
 
+// ---- buckets: how a watched destination sorts what arrives. One expression each: /a/json/pointer, header:Name, or a regular expression.
+const bucketOf = text => text.startsWith('/') ? { pointer: text } : /^header:/i.test(text) ? { header: text.slice(7).trim() } : { regex: text };
+const bucketText = b => b.name || b.pointer || (b.header ? 'header:' + b.header : b.regex);
+// A chip row over the given array of buckets. Typed text becomes a bucket on Enter; one saved with a name keeps it.
+function bucketChips(buckets) {
+  const row = el('div', 'chiprow'), input = el('input');
+  input.placeholder = '/reason, header:name or a regular expression, then Enter'; input.autocomplete = 'off'; input.setAttribute('aria-label', 'Add a bucket');
+  const draw = () => {
+    row.querySelectorAll('.chipx').forEach(c => c.remove());
+    buckets.forEach((b, i) => {
+      const chip = el('span', 'chipx', bucketText(b)), x = el('button');
+      x.type = 'button'; x.innerHTML = icon('x'); x.setAttribute('aria-label', 'Remove bucket ' + bucketText(b));
+      x.onclick = () => { buckets.splice(i, 1); draw(); };
+      chip.append(x); row.insertBefore(chip, input);
+    });
+  };
+  buckets.flush = () => { const v = input.value.trim(); if (v && buckets.length < 5) buckets.push(bucketOf(v)); input.value = ''; draw(); };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); buckets.flush(); } });
+  input.addEventListener('blur', buckets.flush);
+  row.append(input); draw();
+  return row;
+}
+
 // ---- scenarios: saved runs, with several templates in weighted shares
 let sc = null;
 async function loadScenarios() { state.scenarios = await api('/scenarios'); renderScenarios(); }
@@ -583,11 +672,17 @@ const removeButton = (label, click) => { const x = el('button', 'iconbtn'); x.ty
 function openScenario(s) {
   const firstPack = state.packs.find(p => p.templates.length), firstConn = state.connections[0];
   sc = structuredClone(s || { id: null, name: '', parts: [], targets: [], mode: 'spread', count: 10, rate: 5, headers: {} });
+  sc.load = sc.load || {}; sc.watches = sc.watches || [];
+  sc.invalid = { percent: 0, kinds: KINDS.map(k => k[0]), ...(sc.invalid || {}) };
+  if (!sc.invalid.kinds || !sc.invalid.kinds.length) sc.invalid.kinds = KINDS.map(k => k[0]);
+  sc.invalidGoes = { connection: sc.invalid.expect?.connection || '', destination: sc.invalid.expect?.destination || null };
   if (!sc.parts.length) sc.parts.push({ pack: state.pack || firstPack?.id || '', template: state.name || firstPack?.templates[0] || '', weight: 1, vars: {}, expect: null });
   if (!sc.targets.length) sc.targets.push({ connection: firstConn?.id || null, destination: firstConn?.destinations[0] || null });
   $('scTitle').textContent = sc.id ? sc.name : 'New scenario';
   $('scName').value = sc.name; $('scCount').value = sc.count; $('scRate').value = sc.rate; $('scHeaders').value = kvText(sc.headers);
   $('scTimeout').value = Math.min(600, Math.max(1, sc.timeoutSeconds || 10)); $('scMatch').value = sc.match || '';
+  $('scRampUp').value = sc.load.rampUpSeconds ?? ''; $('scDuration').value = sc.load.durationSeconds ?? ''; $('scSenders').value = sc.load.senders ?? ''; $('scSeed').value = sc.seed ?? '';
+  $('scInvalidPercent').value = sc.invalid.percent;
   $('scDelete').hidden = !sc.id;
   renderScenario(); $('scenarioDialog').showModal();
   if (!sc.id) $('scName').focus();
@@ -628,7 +723,35 @@ function renderScenario() {
     erow.append(arrow, eConn, eDest); parts.append(erow);
   });
   shares();
-  $('scVerify').hidden = !sc.parts.some(p => p.expect);
+  const verifies = sc.parts.some(p => p.expect);
+  // the plan: an endless run has neither a count nor a duration
+  pressed($('scUnlimited'), !!sc.load.unlimited); $('scCount').disabled = $('scDuration').disabled = !!sc.load.unlimited;
+  // invalid messages: the share, and once there is one, which kinds and where they should arrive
+  const percent = +$('scInvalidPercent').value; $('scInvalidOut').textContent = percent + '%'; $('scInvalid').hidden = !percent;
+  kindButtons($('scInvalidKinds'), () => sc.invalid.kinds, now => sc.invalid.kinds = now);
+  $('scInvalidExpect').hidden = !verifies; $('scInvalidExpect').replaceChildren();
+  if (verifies) {
+    const holder = el('div'), arrow = el('span', 'arrow', '↳'); arrow.setAttribute('aria-hidden', 'true');
+    arriveOn(holder, sc.invalidGoes, renderScenario);
+    $('scInvalidExpect').append(arrow, ...holder.children);
+  }
+  // other destinations to listen on, and what to sort their arrivals by
+  const watches = $('scWatches'); watches.replaceChildren(); $('scWatchNote').hidden = !sc.watches.length;
+  sc.watches.forEach((w, i) => {
+    const known = receivers();
+    if (!w.connection) w.connection = known[0]?.id || '';
+    const list = connOf(w.connection)?.destinations || [];
+    const row = el('div', 'wrow'), cSel = el('select'), dest = el('input'), names = el('datalist');
+    cSel.append(...known.map(c => new Option(c.name, c.id))); withMissing(cSel, w.connection);
+    cSel.value = w.connection; cSel.required = true; cSel.setAttribute('aria-label', 'Watched connection'); cSel.onchange = () => { w.connection = cSel.value; renderScenario(); };
+    names.id = 'scWatchDests' + i; names.append(...list.map(d => new Option(d)));
+    dest.value = w.destination || ''; dest.required = true; dest.placeholder = 'ORDERS.REJECTED'; dest.setAttribute('list', names.id); dest.autocomplete = 'off';
+    dest.setAttribute('aria-label', 'Watched destination'); dest.oninput = () => w.destination = dest.value;
+    w.buckets = w.buckets || [];
+    row.append(cSel, dest, removeButton('Remove watched destination', () => { sc.watches.splice(i, 1); renderScenario(); }), names, bucketChips(w.buckets));
+    watches.append(row);
+  });
+  $('scVerify').hidden = !verifies;
   sc.targets.forEach((t, i) => {
     // A new row has nothing chosen yet and takes the first of each. A saved one keeps what it says, even if that is gone.
     if (!t.connection) t.connection = state.connections[0]?.id || null;
@@ -648,8 +771,14 @@ function renderScenario() {
 }
 async function saveScenario(thenRun) {
   if (!$('scForm').reportValidity()) return;
-  const body = { ...sc, name: $('scName').value, count: +$('scCount').value, rate: +$('scRate').value || 0, headers: kv($('scHeaders').value),
-    timeoutSeconds: +$('scTimeout').value || 10, match: $('scMatch').value.trim() || null };
+  const percent = +$('scInvalidPercent').value, goes = sc.invalidGoes, verifies = sc.parts.some(p => p.expect);
+  sc.watches.forEach(w => w.buckets.flush?.());
+  const body = { ...sc, name: $('scName').value, count: sc.load.unlimited ? 0 : +$('scCount').value, rate: +$('scRate').value || 0, headers: kv($('scHeaders').value),
+    timeoutSeconds: +$('scTimeout').value || 10, match: $('scMatch').value.trim() || null, seed: whole($('scSeed').value),
+    load: { rampUpSeconds: whole($('scRampUp').value), durationSeconds: sc.load.unlimited ? null : whole($('scDuration').value), senders: whole($('scSenders').value), unlimited: sc.load.unlimited || null },
+    invalid: percent ? { percent, kinds: sc.invalid.kinds, expect: verifies && goes.connection ? { connection: goes.connection, destination: goes.destination } : null } : null,
+    watches: sc.watches.map(w => ({ connection: w.connection, destination: w.destination, buckets: [...w.buckets] })) };
+  delete body.invalidGoes;
   try {
     const saved = await api(sc.id ? '/scenarios/' + sc.id : '/scenarios', json(body, sc.id ? 'PUT' : 'POST'));
     await loadScenarios(); $('scenarioDialog').close();
@@ -669,7 +798,8 @@ async function scenarioFromForm() {   // the send form as a one-template scenari
     if (dirty()) return;
   }
   openScenario({ id: null, name: '', parts: [{ pack: state.pack, template: state.name, weight: 1, vars: vars(), expect: expectation() }], targets: structuredClone(state.targets),
-    mode: state.mode, count: +$('count').value || 10, rate: +$('rate').value || 0, headers: kv($('headers').value), timeoutSeconds: state.expect.timeout, match: state.expect.on ? state.expect.match.trim() : '' });
+    mode: state.mode, count: +$('count').value || 0, rate: +$('rate').value || 0, headers: kv($('headers').value), timeoutSeconds: state.expect.timeout, match: state.expect.on ? state.expect.match.trim() : '',
+    load: loadPlan() || {}, invalid: invalidShare(), seed: seed() });
 }
 
 // ---- runs, sent messages, throughput
@@ -684,37 +814,51 @@ function renderRuns() {
       const top = el('div', 'top'), x = el('button', 'x');
       x.innerHTML = icon('x'); x.title = 'Cancel'; x.setAttribute('aria-label', 'Cancel run');
       x.onclick = () => api('/runs/' + r.id, { method: 'DELETE' }).then(refresh, e => toast(e.message, true));
-      top.append(el('span', 'name', r.label), el('span', 'chip'), x);
+      const name = el('button', 'name', r.label); name.type = 'button'; name.title = 'Statistics, chart and reports'; name.onclick = () => openRun(r.id);
+      top.append(name, el('span', 'chip'), x);
       const meter = el('div', 'meter'); meter.append(el('i'));
       const where = el('span', '', r.targets.length === 1 ? r.targets[0].connection + ' → ' + r.targets[0].destination
         : r.targets.length + ' targets · ' + (r.mode === 'all' ? 'copy to all' : 'spread'));
       where.title = r.targets.map(t => t.connection + ' → ' + t.destination).join('\n');
       const sub = el('div', 'sub'); sub.append(where, el('span'));
-      row.append(top, meter, sub, el('div', 'checks'), el('div', 'error'));
+      row.append(top, meter, sub, el('div', 'facts'), el('div', 'checks'), el('div', 'error'));
     }
     have.delete(r.id); rows.push(row);
     const ended = r.status !== 'RUNNING' && r.status !== 'VERIFYING';
     const shown = r.status === 'DONE' && r.verdict ? r.verdict : r.status;   // a completed run that verified shows its verdict
-    row.className = 'run ' + r.status + (r.verdict ? ' ' + r.verdict : '');
+    row.className = 'run ' + r.status + (r.verdict ? ' ' + r.verdict : '') + (!r.count && !r.durationSeconds ? ' endless' : '');
     const chip = row.querySelector('.chip'); chip.className = 'chip ' + shown; chip.textContent = shown;
     row.querySelector('.x').hidden = ended;
     const checks = row.querySelector('.checks'); checks.hidden = !r.checks.length;
     checks.replaceChildren(...r.checks.map(c => {
       // where it was expected is what a failed check is read for, so it is never cut short: the tally moves to a line of its own instead
-      const line = el('div', 'check'), where = el('span', '', (r.templates.length > 1 ? c.template + ' ' : '') + '→ ' + c.expected), tally = el('span', 'tally', c.arrived + ' / ' + c.sent);
+      const line = el('div', 'check'), where = el('span', '', (r.templates.length > 1 ? c.template + ' ' : '') + (c.invalid ? 'invalid ' : '') + '→ ' + c.expected), tally = el('span', 'tally', c.arrived + ' / ' + c.sent);
       // until the run ends a message that has not arrived is only late, so the counts are not shown as errors yet
+      if (c.accepted) tally.append(el('b', '', ' · ' + c.accepted + ' accepted'));
+      if (c.rejected) tally.append(el('b', '', ' · ' + c.rejected + ' rejected'));
       if (ended && c.misrouted) tally.append(el('b', '', ' · ' + c.misrouted + ' misrouted'));
       if (ended && c.missing) tally.append(el('b', '', ' · ' + c.missing + ' missing'));
       if (c.medianMs != null) { tally.append(' · ' + c.medianMs + ' ms'); tally.title = 'median ' + c.medianMs + ' ms, longest ' + c.maxMs + ' ms'; }
       line.append(where, tally); return line;
     }));
-    row.querySelector('.meter i').style.width = (100 * r.sent / r.count) + '%';
-    row.querySelector('.sub span:last-child').textContent = r.sent.toLocaleString() + ' / ' + r.count.toLocaleString() + took(r);
+    // progress by count, else by time; a run with neither shows that it is going
+    const part = r.count ? (r.sent + r.failed) / r.count : r.durationSeconds ? r.elapsedMs / 1000 / r.durationSeconds : 1;
+    row.querySelector('.meter i').style.width = (ended && !r.count ? 100 : Math.min(100, 100 * part)) + '%';
+    row.querySelector('.sub span:last-child').textContent = r.sent.toLocaleString() + (r.count ? ' / ' + r.count.toLocaleString() : '') + took(r);
+    // one line of what a load run is read for; a single send has nothing to say here
+    const facts = row.querySelector('.facts'), busy = r.sent + r.failed > 20 || r.failed || r.invalid;
+    facts.hidden = !busy; facts.replaceChildren();
+    if (busy) {
+      facts.append(rate(r.actualRate) + '/s' + (r.rate ? ' of ' + rate(r.rate) : '') + (r.latency ? ' · p95 ' + r.latency.p95 + ' ms' : ''));
+      if (r.invalid) facts.append(' · ' + r.invalid.toLocaleString() + ' invalid');
+      if (r.failed) facts.append(el('b', '', ' · ' + r.failed.toLocaleString() + ' failed'));
+    }
     const err = row.querySelector('.error'); err.hidden = !r.error; err.textContent = r.error || '';
   }
   have.forEach(row => row.remove());
   rows.forEach((row, i) => { if (box.children[i] !== row) box.insertBefore(row, box.children[i] || null); });
 }
+const rate = v => v >= 100 ? Math.round(v).toLocaleString() : (+(+v).toFixed(v >= 10 ? 1 : 2)).toString();
 const key = m => m.runId + '#' + m.n + '#' + m.target;
 function renderSent() {
   const list = $('sentList'), body = $('sentBody'); list.replaceChildren();
@@ -723,7 +867,9 @@ function renderSent() {
   if (!state.messages.some(m => key(m) === state.picked)) state.picked = key(state.messages[0]);
   for (const m of state.messages) {
     const b = el('button', 'row' + (key(m) === state.picked ? ' on' : ''));
-    b.append(el('span', 'n', '#' + m.n), el('span', 'd', m.destination), el('span', 't', time(m.at)));
+    b.append(el('span', 'n', '#' + m.n), el('span', 'd', m.destination));
+    if (m.fault) b.append(el('span', 'tag bad', m.fault));
+    b.append(el('span', 't', time(m.at)));
     b.title = m.connection + ' → ' + m.destination;
     b.onclick = () => { state.picked = key(m); renderSent(); };
     list.append(b);
@@ -737,10 +883,219 @@ async function showPicked() {
   try {
     const full = await api(`/messages/${encodeURIComponent(m.runId)}/${m.n}/${m.target}`), text = full.body;
     if (want !== state.picked) return;   // another one was picked while this was on its way
-    const meta = [m.connection + ' → ' + m.destination + '   ' + m.template, ...Object.entries(full.headers || {}).map(([k, v]) => k + ': ' + v)];
+    const meta = [m.connection + ' → ' + m.destination + '   ' + m.template + (m.fault ? '   invalid: ' + m.fault : ''), ...Object.entries(full.headers || {}).map(([k, v]) => k + ': ' + v)];
     body.dataset.raw = text; body.innerHTML = span('t-com', esc(meta.join('\n'))) + '\n\n' + highlight(text, langOf(null, text));
     shownKey = want;
   } catch (e) { if (want === state.picked) { body.dataset.raw = ''; body.textContent = e.message; } }
+}
+
+// ---- one run, or one monitor, in full: numbers, the rate over time, and what arrived on each watched destination
+const lasted = ms => ms >= 3600000 ? Math.floor(ms / 3600000) + ' h ' + String(Math.floor(ms / 60000) % 60).padStart(2, '0') + ' min'
+  : ms >= 60000 ? Math.floor(ms / 60000) + ' min ' + String(Math.floor(ms / 1000) % 60).padStart(2, '0') + ' s' : (ms / 1000).toFixed(1) + ' s';
+const tile = (label, value, bad) => { const t = el('div', 'tile' + (bad ? ' bad' : '')); t.append(el('b', '', value), el('span', '', label)); return t; };
+const panel = (title, ...children) => { const p = el('section', 'panel'); if (title) p.append(el('h3', '', title)); p.append(...children); return p; };
+function table(head, rows) {
+  const t = el('table', 't'), tr = el('tr');
+  head.forEach(h => { const th = el('th', typeof h === 'object' ? 'n' : '', typeof h === 'object' ? h.n : h); th.scope = 'col'; tr.append(th); });
+  t.append(tr);
+  for (const row of rows) {
+    const r = el('tr');
+    row.forEach((c, i) => r.append(c instanceof Node ? c : el('td', typeof head[i] === 'object' ? 'n' : '', c == null ? '' : typeof c === 'number' ? c.toLocaleString() : c)));
+    t.append(r);
+  }
+  return t;
+}
+const niceMax = v => { const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 4, 5, 8, 10].find(s => v <= s * p) * p; };
+const clock = s => { s = Math.round(s); const mm = String(Math.floor(s / 60) % 60), ss = String(s % 60).padStart(2, '0'); return s >= 3600 ? Math.floor(s / 3600) + ':' + mm.padStart(2, '0') + ':' + ss : mm + ':' + ss; };
+// The numbers in the drawing are the server's; nothing in it is text from a message.
+function rateChart(series) {
+  const w = 960, h = 250, l = 52, r = 12, t = 12, b = 28, box = el('div');
+  let max = 1, end = 1;
+  for (const p of series) { max = Math.max(max, p.sent / p.seconds, p.failed / p.seconds, p.target || 0); end = Math.max(end, p.t + p.seconds); }
+  max = niceMax(max);
+  const x = p => l + (p.t + p.seconds / 2) * (w - l - r) / end, y = v => h - b - v * (h - t - b) / max;
+  // one point is drawn as a level line across, where a path of one point would draw nothing
+  const path = f => series.length === 1 ? `M${l} ${y(f(series[0])).toFixed(1)}L${w - r} ${y(f(series[0])).toFixed(1)}`
+    : series.map((p, i) => (i ? 'L' : 'M') + x(p).toFixed(1) + ' ' + y(f(p)).toFixed(1)).join('');
+  const sent = path(p => p.sent / p.seconds), anyFailed = series.some(p => p.failed), anyTarget = series.some(p => p.target != null);
+  const x0 = series.length === 1 ? l : x(series[0]), x1 = series.length === 1 ? w - r : x(series.at(-1));
+  let svg = '';
+  for (let i = 0; i <= 4; i++) {
+    const gy = (h - b - (h - t - b) * i / 4).toFixed(1);
+    svg += `<line class="grid" x1="${l}" x2="${w - r}" y1="${gy}" y2="${gy}"/><text x="${l - 8}" y="${+gy + 4}" text-anchor="end">${rate(max * i / 4)}</text>`;
+  }
+  for (let i = 0; i <= 6; i++) svg += `<text x="${(l + (w - l - r) * i / 6).toFixed(1)}" y="${h - 8}" text-anchor="middle">${clock(end * i / 6)}</text>`;
+  svg += `<path class="area" d="${sent}L${x1.toFixed(1)} ${h - b}L${x0.toFixed(1)} ${h - b}Z"/>`;
+  if (anyTarget) svg += `<path class="target" d="${path(p => p.target || 0)}"/>`;
+  svg += `<path class="sent" d="${sent}"/>`;
+  if (anyFailed) svg += `<path class="failed" d="${path(p => p.failed / p.seconds)}"/>`;
+  const last = series.at(-1);
+  box.innerHTML = `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img"></svg>`;
+  box.firstChild.innerHTML = svg;
+  box.firstChild.setAttribute('aria-label', 'Messages a second over the run. Latest: ' + rate(last.sent / last.seconds) + ' sent a second'
+    + (last.target != null ? ', target ' + rate(last.target) : '') + (anyFailed ? ', ' + rate(last.failed / last.seconds) + ' failed a second' : ''));
+  const legend = el('div', 'legend'), entry = (cls, text) => { const s = el('span'); s.append(el('i', cls), text); return s; };
+  legend.append(entry('', 'sent a second'));
+  if (anyTarget) legend.append(entry('target', 'target'));
+  if (anyFailed) legend.append(entry('failed', 'failed a second'));
+  box.append(legend);
+  return box;
+}
+// A watched destination: counts, a table per bucket, the newest arrivals without their bodies, and a few bodies as a sample.
+function watchPanel(w) {
+  const head = el('div', 'whead'), p = el('section', 'panel');
+  head.append(el('h3', '', w.connection + ' / ' + w.destination), el('span', '', w.count.toLocaleString() + ' arrived · ' + rate(w.rate) + '/s' + (w.lastAt ? ' · last ' + time(w.lastAt) : '')));
+  p.append(head);
+  for (const t of w.tables) {
+    const bars = el('div', 'bars'), most = Math.max(1, ...t.values.map(v => v.count));
+    bars.append(el('h4', '', t.name));
+    for (const v of t.values) { const bar = el('i'); bar.style.width = (100 * v.count / most) + '%'; const name = el('span', '', v.value); name.title = v.value; bars.append(name, bar, el('b', '', v.count.toLocaleString())); }
+    if (!t.values.length) bars.append(el('span', '', 'Nothing yet'));
+    p.append(bars);
+  }
+  if (w.recent.length && w.tables.length) {   // without buckets a row would say a time and a size, and the count above says as much
+    const scroll = el('div', 'scroll');
+    const matched = w.recent.some(a => a.message != null);   // a monitor, and a run that does not verify, recognise no message
+    scroll.append(table(['Time', ...w.tables.map(t => t.name), ...(matched ? [{ n: 'Message' }] : []), { n: 'Bytes' }],
+      w.recent.map(a => [time(a.at), ...a.values, ...(matched ? [a.message == null ? '' : '#' + a.message] : []), a.bytes])));
+    p.append(scroll);
+  }
+  if (w.samples?.length) {
+    const d = el('details', 'samples'); d.append(el('summary', '', 'Newest bodies'));
+    d.open = watchPanel.open.has(w.connection + '/' + w.destination);
+    d.ontoggle = () => watchPanel.open[d.open ? 'add' : 'delete'](w.connection + '/' + w.destination);
+    w.samples.forEach(s => d.append(el('pre', '', s)));
+    p.append(d);
+  }
+  return p;
+}
+watchPanel.open = new Set();
+function showDetail(title, chip, acts, children) {
+  $('detailTitle').textContent = title;
+  $('detailChip').className = 'chip ' + (chip || ''); $('detailChip').textContent = chip || ''; $('detailChip').hidden = !chip;
+  if ($('detailActs').dataset.for !== state.open?.id) { $('detailActs').replaceChildren(...acts()); $('detailActs').dataset.for = state.open.id; }
+  // rebuilt each second, so where the user has scrolled to is put back
+  const body = $('detailBody'), top = body.scrollTop, inner = [...body.querySelectorAll('.scroll')].map(s => s.scrollTop);
+  body.replaceChildren(...children);
+  body.scrollTop = top; body.querySelectorAll('.scroll').forEach((s, i) => s.scrollTop = inner[i] || 0);
+  if (!$('detail').open) $('detail').showModal();
+}
+function renderRunDetail(d) {
+  const r = d.run, ended = r.status !== 'RUNNING' && r.status !== 'VERIFYING', shown = r.status === 'DONE' && r.verdict ? r.verdict : r.status;
+  const tiles = el('div', 'tiles');
+  tiles.append(tile('sent', r.sent.toLocaleString()), tile('failed', r.failed.toLocaleString(), r.failed > 0));
+  if (Object.keys(r.faults).length) tiles.append(tile('invalid', r.invalid.toLocaleString()));
+  tiles.append(tile(r.targetRate != null ? 'a second, of ' + rate(r.targetRate) : 'a second', rate(r.actualRate)), tile('sending', lasted(r.elapsedMs)));
+  if (r.latency) tiles.append(tile('send p50', r.latency.p50 + ' ms'), tile('send p95', r.latency.p95 + ' ms'), tile('send p99', r.latency.p99 + ' ms'));
+  const parts = [tiles];
+  if (r.error) parts.push(el('div', 'result bad', r.error));
+  if (d.series.length) parts.push(panel(null, rateChart(d.series)));
+  const side = el('div', 'grid2');
+  if (r.checks.length) side.append(panel('Arrivals', table(['Template', 'Expected on', { n: 'Sent' }, 'Result'], r.checks.map(c => {
+    const result = el('td', !ended ? '' : c.arrived === c.sent ? 'ok' : 'bad');
+    result.append(c.arrived.toLocaleString() + (c.invalid ? ' rejected as expected' : ' arrived'));
+    if (c.accepted) result.append(el('b', '', ', ' + c.accepted + ' accepted although invalid'));
+    if (c.rejected) result.append(el('b', '', ', ' + c.rejected + ' valid but rejected'));
+    if (ended && c.misrouted) result.append(el('b', '', ', ' + c.misrouted + ' misrouted'));
+    if (ended && c.missing) result.append(el('b', '', ', ' + c.missing + ' missing'));
+    if (c.medianMs != null) result.append(' · ' + c.medianMs + ' ms');
+    return [c.template + (c.invalid ? ' (invalid)' : ''), c.expected, c.sent, result];
+  }))));
+  if (Object.keys(r.faults).length) side.append(panel('Invalid messages', table(['Kind', { n: 'Messages' }], Object.entries(r.faults).map(([k, n]) => [k, n]))));
+  if (r.errors.length) side.append(panel('Send errors', table(['Error', { n: 'Count' }, { n: 'Last' }], r.errors.map(e => [e.message, e.count, time(e.lastAt)]))));
+  if (side.children.length) parts.push(side);
+  d.watches.filter(w => w.count || w.tables.length).forEach(w => parts.push(watchPanel(w)));
+  parts.push(el('div', 'plan', [r.targets.map(t => t.connection + ' → ' + t.destination).join(', '), r.templates.join(', '),
+    r.rate ? rate(r.rate) + '/s' + (r.rampUpSeconds ? ' reached over ' + r.rampUpSeconds + ' s' : '') : 'as fast as possible',
+    r.count ? r.count.toLocaleString() + ' messages' : null, r.durationSeconds ? 'for ' + r.durationSeconds + ' s' : null,
+    r.senders + (r.senders === 1 ? ' sender' : ' senders'), 'seed ' + r.seed].filter(Boolean).join(' · ')));
+  showDetail(r.label, shown, () => [['html', 'HTML'], ['json', 'JSON'], ['csv', 'CSV'], ['series', 'Series']].map(([format, label]) => {
+    const a = el('a', 'btn', label); a.href = '/api/runs/' + encodeURIComponent(r.id) + '/report?format=' + format; a.download = '';
+    a.title = format === 'series' ? 'The rate over time as CSV' : 'Download the report as ' + label; return a;
+  }), parts);
+}
+function renderMonitorDetail(m) {
+  const parts = [];
+  if (m.error) parts.push(el('div', 'result bad', m.error));
+  parts.push(watchPanel(m.watch), el('p', 'note', 'Receiving takes the messages off a queue. Since ' + time(m.watch.since) + '.'));
+  showDetail(m.watch.connection + ' / ' + m.watch.destination, m.error ? 'FAILED' : 'RUNNING', () => {
+    const reset = el('button', 'btn', 'Reset'), stop = el('button', 'btn danger', 'Stop');
+    reset.type = stop.type = 'button';
+    reset.onclick = () => api('/monitors/' + m.id + '/reset', { method: 'POST' }).then(refreshOpen, e => toast(e.message, true));
+    stop.onclick = () => api('/monitors/' + m.id, { method: 'DELETE' }).then(() => { $('detail').close(); loadMonitors(); }, e => toast(e.message, true));
+    return [reset, stop];
+  }, parts);
+}
+async function refreshOpen() {
+  const open = state.open;
+  if (!open) return;
+  try {
+    if (open.kind === 'run') { const d = await api('/runs/' + encodeURIComponent(open.id)); if (state.open === open) renderRunDetail(d); }
+    else { const m = state.monitors.find(m => m.id === open.id); if (m) renderMonitorDetail(m); else $('detail').close(); }
+  } catch (e) { if (e.status === 404 && state.open === open) { $('detail').close(); toast('That run is no longer kept.', true); } }
+}
+function openRun(id) { state.open = { kind: 'run', id }; try { history.replaceState(null, '', '#run=' + id); } catch (_) {} refreshOpen(); }
+function openMonitor(id) { state.open = { kind: 'monitor', id }; refreshOpen(); }
+$('detail').addEventListener('close', () => { state.open = null; $('detailActs').dataset.for = ''; try { history.replaceState(null, '', location.pathname); } catch (_) {} });
+
+// ---- monitors: a destination watched outside any run
+let newBuckets = [];
+async function loadMonitors() {
+  state.monitors = await api('/monitors');
+  const box = $('monitors'), have = new Map([...box.children].map(c => [c.dataset.id, c]));
+  for (const m of state.monitors) {
+    let row = have.get(m.id);
+    if (!row) {
+      row = el('div', 'scn'); row.dataset.id = m.id;
+      const open = el('button', 'tpl'), stop = el('button', 'play');
+      open.append(el('span', 'name', m.watch.destination)); open.title = m.watch.connection + ' / ' + m.watch.destination; open.onclick = () => openMonitor(m.id);
+      stop.innerHTML = icon('x'); stop.title = 'Stop watching'; stop.setAttribute('aria-label', 'Stop watching ' + m.watch.destination);
+      stop.onclick = () => api('/monitors/' + m.id, { method: 'DELETE' }).then(loadMonitors, e => toast(e.message, true));
+      row.append(open, el('span', 'badge'), stop); box.append(row);
+    }
+    have.delete(m.id);
+    row.classList.toggle('bad', !!m.error);
+    row.querySelector('.badge').textContent = m.error ? 'failed' : m.watch.count.toLocaleString();
+  }
+  have.forEach(row => row.remove());
+}
+function openMonitorForm() {
+  const known = receivers();
+  if (!known.length) return toast('No connection that can receive.', true);
+  newBuckets = [];
+  $('mConn').replaceChildren(...known.map(c => new Option(c.name, c.id)));
+  const dests = () => $('mDests').replaceChildren(...(connOf($('mConn').value)?.destinations || []).map(d => new Option(d)));
+  $('mConn').onchange = dests; dests();
+  $('mDest').value = '';
+  $('mBuckets').replaceWith(Object.assign(bucketChips(newBuckets), { id: 'mBuckets' }));
+  $('monitorDialog').showModal(); $('mDest').focus();
+}
+async function startMonitor(e) {
+  e.preventDefault();
+  newBuckets.flush();
+  try {
+    const m = await api('/monitors', json({ connection: $('mConn').value, destination: $('mDest').value, buckets: [...newBuckets] }));
+    $('monitorDialog').close(); await loadMonitors(); openMonitor(m.id);
+  } catch (err) { toast(err.message, true); }
+}
+
+// ---- saved reports
+async function openReports() {
+  const body = $('reportsBody'); body.replaceChildren();
+  try {
+    const saved = await api('/reports');
+    if (!saved.enabled) body.append(el('div', 'empty', 'Start msgforge with MSGFORGE_REPORTS set to a folder, and every run that ends is saved there.'));
+    else if (!saved.reports.length) body.append(el('div', 'empty', 'No run has ended yet'));
+    else {
+      const names = { html: 'HTML', json: 'JSON', csv: 'CSV' };
+      body.append(table(['Started', 'Run', ''], saved.reports.map(r => {
+        const links = el('td', 'n reports');
+        for (const f of r.files) { const a = el('a', '', f.endsWith('.series.csv') ? 'Series' : names[f.split('.').pop()]); a.href = '/api/reports/' + encodeURIComponent(f); a.download = ''; links.append(a); }
+        return [new Date(r.at).toLocaleString([], { hour12: false }), (r.label || 'run') + ' · ' + r.id, links];
+      })), el('p', 'note', 'The newest ' + saved.keep + ' runs are kept.'));
+    }
+  } catch (e) { body.append(el('div', 'result bad', e.message)); }
+  $('reportsDialog').showModal();
 }
 
 const samples = Array(60).fill(0), seen = new Map();
@@ -767,6 +1122,7 @@ async function refresh() {
     }
     primed = true;
     renderRuns(); paintLeds(); requestAnimationFrame(tween);
+    loadMonitors().then(refreshOpen, () => {});
     const top = messages.length ? key(messages[0]) : '';
     if (top !== newest) {   // follow the newest message unless the user is reading an older one
       const following = !state.picked || !state.messages.length || state.picked === key(state.messages[0]);
@@ -841,6 +1197,18 @@ $('addTarget').onclick = () => { state.targets.push({ connection: state.targets.
 $('mode').querySelectorAll('button').forEach(b => b.onclick = () => { state.mode = b.dataset.mode; renderTargets(); });
 $('vars').addEventListener('input', previewSoon);
 $('verify').onclick = () => { state.expect.on = !state.expect.on; renderExpect(); remember(); };
+$('loadToggle').onclick = () => { state.load.on = !state.load.on; renderLoad(); remember(); };
+$('invalidToggle').onclick = () => { state.invalid.on = !state.invalid.on; renderInvalid(); remember(); };
+$('unlimited').onclick = () => { state.load.unlimited = !state.load.unlimited; renderLoad(); remember(); };
+for (const id of ['rampUp', 'duration', 'senders', 'seed']) $(id).oninput = () => { state.load[id] = $(id).value; remember(); };
+$('invalidPercent').oninput = () => { state.invalid.percent = +$('invalidPercent').value; $('invalidOut').textContent = state.invalid.percent + '%'; remember(); };
+$('raw').onclick = () => { state.raw = !state.raw; $('raw').setAttribute('aria-pressed', state.raw); $('vars').disabled = state.raw; preview(); };
+$('newMonitor').onclick = openMonitorForm;
+$('monitorForm').addEventListener('submit', startMonitor);
+$('reports').onclick = openReports;
+$('scUnlimited').onclick = () => { sc.load.unlimited = !sc.load.unlimited; renderScenario(); };
+$('scInvalidPercent').oninput = renderScenario;
+$('scAddWatch').onclick = () => { sc.watches.push({ connection: '', destination: '', buckets: [] }); renderScenario(); };
 $('saveScenario').onclick = scenarioFromForm;
 $('newScenario').onclick = () => openScenario(null);
 $('scAddPart').onclick = () => { sc.parts.push({ ...sc.parts.at(-1), weight: 1, vars: {}, expect: null }); renderScenario(); };
@@ -873,7 +1241,11 @@ window.addEventListener('beforeunload', e => { if (state.name && dirty()) e.prev
     if (Array.isArray(kept.targets) && kept.targets.length) state.targets = kept.targets.slice(0, 10).map(t => ({ connection: t.connection || null, destination: t.destination || null }));
     if (kept.mode === 'all') state.mode = 'all';
     if (kept.expect) Object.assign(state.expect, { on: !!kept.expect.on, connection: kept.expect.connection || null, destination: kept.expect.destination || null, timeout: +kept.expect.timeout || 10, match: String(kept.expect.match || '') });
-    if (kept.count) $('count').value = kept.count;
+    if (kept.load) for (const k of Object.keys(state.load)) if (typeof kept.load[k] === typeof state.load[k]) state.load[k] = kept.load[k];
+    if (kept.invalid) Object.assign(state.invalid, { on: !!kept.invalid.on, percent: Math.min(100, Math.max(0, +kept.invalid.percent || 0)),
+      kinds: Array.isArray(kept.invalid.kinds) ? kept.invalid.kinds.filter(k => KINDS.some(x => x[0] === k)) : null,
+      connection: String(kept.invalid.connection || ''), destination: kept.invalid.destination || null });
+    if (kept.count != null && kept.count !== '') $('count').value = kept.count;
     if (kept.rate != null && kept.rate !== '') $('rate').value = kept.rate;
   } catch (_) {}
   // Each part of the page loads on its own: one that fails is reported and the rest still work.
@@ -881,5 +1253,8 @@ window.addEventListener('beforeunload', e => { if (state.name && dirty()) e.prev
   try { await openFirst(); } catch (e) { loads.push({ reason: e }); }
   const failed = loads.filter(l => l.reason).map(l => l.reason.message);
   if (failed.length) toast(failed.join(' · '), true);
+  renderLoad(); renderInvalid();
   renderSent(); await refresh(); setInterval(tick, 1000);
+  const linked = /^#run=([0-9a-f]{8})$/.exec(location.hash);   // a link to one run opens it
+  if (linked) openRun(linked[1]);
 })();

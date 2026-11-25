@@ -25,10 +25,14 @@
     <div class="tree">
       <div class="pack"><span>Scenarios</span><div class="acts"><button id="newScenario" data-icon="plus" title="New scenario" aria-label="New scenario"></button></div></div>
       <div id="scenarios"></div>
+      <div class="pack"><span>Monitors</span><div class="acts"><button id="newMonitor" data-icon="plus" title="Watch a destination" aria-label="New monitor"></button></div></div>
+      <div id="monitors"></div>
       <div id="packs"></div>
       <button class="newpack" id="newPack" data-icon="plus">New pack</button>
     </div>
-    <div class="foot"><span>v0.2.0</span><button class="iconbtn" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
+    <div class="foot"><span>v0.2.0</span><span class="grow"></span>
+      <button class="iconbtn" id="reports" data-icon="archive" title="Saved reports" aria-label="Saved reports"></button>
+      <button class="iconbtn" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
   </nav>
 
   <main class="work">
@@ -36,6 +40,7 @@
       <div class="head">
         <div class="file" id="file"></div>
         <span class="grow"></span>
+        <button class="btn ghost" id="raw" aria-pressed="false" title="Send the text exactly as typed: placeholders are not filled in">Raw</button>
         <button class="btn ghost" id="insert" data-icon="braces" aria-haspopup="true" aria-expanded="false">Insert</button>
         <button class="iconbtn" id="recognise" data-icon="wand" title="Find the values that should differ per message" aria-label="Find the values that should differ per message"></button>
         <button class="iconbtn" id="deleteTemplate" data-icon="trash" title="Delete template" aria-label="Delete template"></button>
@@ -77,14 +82,32 @@
       </div>
       <div class="tools">
         <button type="button" class="btn ghost" id="addTarget" data-icon="plus">Target</button>
-        <button type="button" class="btn ghost" id="verify" data-icon="check" aria-pressed="false" title="Check where the messages arrive">Verify</button>
+        <button type="button" class="btn ghost" id="verify" data-icon="check" aria-pressed="false" aria-controls="expect" title="Check where the messages arrive">Verify</button>
+        <button type="button" class="btn ghost" id="loadToggle" data-icon="gauge" aria-pressed="false" aria-controls="load" title="Ramp-up, duration, senders, seed">Load</button>
+        <button type="button" class="btn ghost" id="invalidToggle" data-icon="alert" aria-pressed="false" aria-controls="invalid" title="Make a share of the messages invalid on purpose">Invalid</button>
         <span class="grow"></span>
         <button type="button" class="btn ghost" id="manage" data-icon="sliders" title="Connections" aria-label="Connections"></button>
       </div>
       <div id="expect" hidden></div>
       <div class="two">
-        <label class="field"><span>Messages</span><input id="count" type="number" min="1" max="1000000" value="10" required></label>
+        <label class="field"><span>Messages</span><input id="count" type="number" min="0" max="1000000000" value="10" required></label>
         <label class="field"><span>Per second</span><input id="rate" type="number" min="0" step="any" value="5" title="0 sends as fast as possible"></label>
+      </div>
+      <div id="load" hidden>
+        <div class="three">
+          <label class="field"><span>Ramp-up (s)</span><input id="rampUp" type="number" min="0" max="86400" placeholder="0"></label>
+          <label class="field"><span>Duration (s)</span><input id="duration" type="number" min="0" max="604800" placeholder="none"></label>
+          <label class="field"><span>Senders</span><input id="senders" type="number" min="0" max="64" placeholder="1" title="0 adds senders while the run falls behind its rate"></label>
+        </div>
+        <div class="pair">
+          <label class="field grow"><span>Seed</span><input id="seed" type="number" min="0" step="1" placeholder="random" title="The same seed repeats the same messages and faults"></label>
+          <button type="button" class="btn hold" id="unlimited" aria-pressed="false" title="No count and no duration: the run goes on until it is cancelled">Until stopped</button>
+        </div>
+      </div>
+      <div id="invalid" hidden>
+        <label class="field slide"><span>Invalid <output id="invalidOut" for="invalidPercent">5%</output></span><input id="invalidPercent" type="range" min="0" max="100" step="1" value="5"></label>
+        <div class="kinds" id="invalidKinds" role="group" aria-label="Kinds of invalid message"></div>
+        <div id="invalidExpect" hidden></div>
       </div>
       <label class="field"><span>Overrides</span><input id="vars" placeholder="currency=EUR" autocomplete="off"></label>
       <label class="field"><span>Headers</span><input id="headers" placeholder="JMSCorrelationID={{uuid}}" autocomplete="off"></label>
@@ -177,13 +200,32 @@
       <button type="button" data-mode="all" title="Every message goes to every target">Copy to all</button>
     </div>
     <div class="two">
-      <label class="field"><span>Messages</span><input id="scCount" type="number" min="1" max="1000000" required></label>
+      <label class="field"><span>Messages</span><input id="scCount" type="number" min="0" max="1000000000" required></label>
       <label class="field"><span>Per second</span><input id="scRate" type="number" min="0" step="any" title="0 sends as fast as possible"></label>
     </div>
+    <div class="four">
+      <label class="field"><span>Ramp-up (s)</span><input id="scRampUp" type="number" min="0" max="86400" placeholder="0"></label>
+      <label class="field"><span>Duration (s)</span><input id="scDuration" type="number" min="0" max="604800" placeholder="none"></label>
+      <label class="field"><span>Senders</span><input id="scSenders" type="number" min="0" max="64" placeholder="1" title="0 adds senders while the run falls behind its rate"></label>
+      <label class="field"><span>Seed</span><input id="scSeed" type="number" min="0" step="1" placeholder="random" title="The same seed repeats the same messages and faults"></label>
+    </div>
+    <button type="button" class="btn hold" id="scUnlimited" aria-pressed="false" title="No count and no duration: the run goes on until it is cancelled">Until stopped</button>
     <label class="field"><span>Headers</span><input id="scHeaders" placeholder="JMSCorrelationID={{uuid}}" autocomplete="off"></label>
     <div class="two" id="scVerify" hidden>
       <label class="field"><span>Timeout (s)</span><input id="scTimeout" type="number" min="1" max="600" required></label>
       <label class="field"><span>Match</span><input id="scMatch" placeholder="{{uuid}}" autocomplete="off" title="What identifies a message when it arrives. Empty uses the first uuid or id in the body."></label>
+    </div>
+    <div>
+      <label class="field slide"><span>Invalid <output id="scInvalidOut" for="scInvalidPercent">0%</output></span><input id="scInvalidPercent" type="range" min="0" max="100" step="1" value="0"></label>
+      <div id="scInvalid" hidden>
+        <div class="kinds" id="scInvalidKinds" role="group" aria-label="Kinds of invalid message"></div>
+        <div class="trow erow" id="scInvalidExpect"></div>
+      </div>
+    </div>
+    <div>
+      <div class="fhead"><span>Watch</span><button type="button" class="btn ghost" id="scAddWatch" data-icon="plus">Destination</button></div>
+      <div id="scWatches"></div>
+      <p class="note" id="scWatchNote" hidden>Receiving takes the messages off a queue.</p>
     </div>
     <div class="mfoot">
       <button type="button" class="btn danger" id="scDelete">Delete</button>
@@ -192,6 +234,37 @@
       <button class="btn primary">Save</button>
     </div>
   </form>
+</dialog>
+
+<dialog class="modal wide" id="detail" aria-labelledby="detailTitle">
+  <div class="mhead">
+    <h2 id="detailTitle"></h2><span class="chip" id="detailChip"></span>
+    <span class="grow"></span>
+    <div class="acts" id="detailActs"></div>
+    <button class="iconbtn" data-close data-icon="x" aria-label="Close"></button>
+  </div>
+  <div class="dbody" id="detailBody"></div>
+</dialog>
+
+<dialog class="modal narrow" id="monitorDialog" aria-labelledby="monitorTitle">
+  <div class="mhead"><h2 id="monitorTitle">New monitor</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <form class="mform" id="monitorForm">
+    <div class="two">
+      <label class="field"><span>Connection</span><select id="mConn" required></select></label>
+      <label class="field"><span>Destination</span><input id="mDest" list="mDests" required autocomplete="off" placeholder="ORDERS.REJECTED"><datalist id="mDests"></datalist></label>
+    </div>
+    <div class="field">
+      <span>Bucket by</span>
+      <div class="chiprow" id="mBuckets"><input id="mBucketInput" placeholder="/reason, header:name or a regular expression, then Enter" autocomplete="off" aria-label="Add a bucket"></div>
+    </div>
+    <p class="note">Receiving takes the messages off a queue.</p>
+    <div class="mfoot"><span class="grow"></span><button class="btn primary" data-icon="eye">Start</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal narrow" id="reportsDialog" aria-labelledby="reportsTitle">
+  <div class="mhead"><h2 id="reportsTitle">Saved reports</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <div class="dbody" id="reportsBody"></div>
 </dialog>
 
 <dialog class="modal tiny" id="ask" aria-labelledby="askTitle">
