@@ -166,7 +166,7 @@ If the consumer is not a JMS application, use a destination like `queue:///MY.QU
 
 ### Plugin connection types
 
-The release carries these as plugins. Their settings, how headers map and how each one receives are in [docs/connections.md](docs/connections.md).
+The release carries all of these but Pulsar as plugins. Their settings, how headers map and how each one receives are in [docs/connections.md](docs/connections.md).
 
 | Type | Destination | Verified against |
 |---|---|---|
@@ -281,7 +281,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 | Apache Pulsar | reads the topic from its end with a reader (no durable subscription), so other subscriptions are not affected |
 | HTTP | cannot receive |
 
-Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.
+Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (every type that receives, apart from Dry run; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.
 
 ## Extending msgforge
 
@@ -358,7 +358,7 @@ class AmqpType implements TransportType {
 }
 ```
 
-`open` is called for every run and every connection test, and the sender is closed when that run or test ends. `extensions/kafka` is a complete type to copy from.
+`open` is called for every run and every connection test, and the sender is closed when that run or test ends. `extensions/kafka` is a complete type to copy from. The other plugins in `extensions/` share a build script, `extensions/plugin.gradle`, and the TLS settings and URI checks in `extensions/shared`, which is compiled into each of their jars.
 
 To let expectations use the type, also override `canReceive()` to return true and `subscribe(settings, destination, onMessage, onError)` to hand each arriving body to `onMessage` until the returned subscription is closed. Call `onError` if receiving breaks after `subscribe` has returned, so the run fails instead of counting messages as missing.
 
@@ -378,7 +378,7 @@ MSGFORGE_IT_RABBITMQ=amqp://127.0.0.1:5672 MSGFORGE_IT_RABBITMQ_USER=… MSGFORG
 
 `.github/workflows/ci.yml` runs the same command and is started by hand only.
 
-The release zip has no automated test. It is checked by hand before a release: `./gradlew dist`, unzip into an empty folder, start `bin/msgforge` from another directory, and confirm that the console lists the `demo` pack with its three templates and that `GET /api/types` includes `kafka`.
+The release zip has no automated test. It is checked by hand before a release: `./gradlew dist`, unzip into an empty folder, start `bin/msgforge` from another directory, and confirm that the console lists the `demo` pack with its three templates and that `GET /api/types` includes `kafka`, `rabbitmq`, `mqtt`, `amqp`, `sqs` and `nats`.
 
 ## Licence
 
