@@ -56,7 +56,7 @@ final class Observer {
     private final String connection, destination;
     private final List<Extractor> extractors = new ArrayList<>();
     private final List<Map<String, long[]>> tables = new ArrayList<>();
-    private final Deque<Recent> recent = new ArrayDeque<>();
+    private final Deque<Entry> recent = new ArrayDeque<>();
     private final Deque<String> samples = new ArrayDeque<>();
     private final Stats.Window window = new Stats.Window();
     private long count, sinceNanos = System.nanoTime();
@@ -97,6 +97,23 @@ final class Observer {
 
     private static boolean blank(String s) {
         return s == null || s.isBlank();
+    }
+
+    /**
+     * An arrival as it is kept. Which sent message it is can become known a moment after it arrived: a reply can
+     * beat the return of the send that tells the message's id. Whoever finds out says so here.
+     */
+    static final class Entry {
+        private final Instant at = Instant.now();
+        private final List<String> values;
+        private final int bytes;
+        volatile Long message;
+
+        Entry(List<String> values, Long message, int bytes) {
+            this.values = values;
+            this.message = message;
+            this.bytes = bytes;
+        }
     }
 
     /** One bucket, ready to use. An expression that runs out of time three times is not asked again. */
@@ -180,8 +197,8 @@ final class Observer {
         }
     }
 
-    /** message is the number of the sent message this arrival was recognised as, or null. */
-    void arrived(TransportType.Arrival a, Long message) {
+    /** message is the number of the sent message this arrival was recognised as, or null. Returns what was kept of it. */
+    Entry arrived(TransportType.Arrival a, Long message) {
         JsonNode json = null;
         if (extractors.stream().anyMatch(e -> e.pointer != null) && a.body().length() <= MAX_JSON) {
             try {
@@ -201,13 +218,15 @@ final class Observer {
                 table.computeIfAbsent(value, v -> new long[1])[0]++;
                 values.add(value);
             }
+            Entry entry = new Entry(values, message, utf8Length(a.body()));
             count++;
-            lastAt = Instant.now();
+            lastAt = entry.at;
             window.add(now, 1);
-            recent.addFirst(new Recent(lastAt, values, message, utf8Length(a.body())));
+            recent.addFirst(entry);
             if (recent.size() > RECENT) recent.removeLast();
             samples.addFirst(a.body().length() > SAMPLE_TEXT ? a.body().substring(0, SAMPLE_TEXT) + "…" : a.body());
             if (samples.size() > SAMPLES) samples.removeLast();
+            return entry;
         }
     }
 
@@ -252,6 +271,6 @@ final class Observer {
         }
         long now = System.nanoTime();
         return new View(connection, destination, count, window.rate(now, 10, now - sinceNanos), lastAt, since, out,
-                List.copyOf(recent), withSamples ? List.copyOf(samples) : List.of());
+                recent.stream().map(e -> new Recent(e.at, e.values, e.message, e.bytes)).toList(), withSamples ? List.copyOf(samples) : List.of());
     }
 }

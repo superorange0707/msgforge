@@ -133,12 +133,23 @@ final class Stats {
     synchronized List<Point> series(long elapsed, Runs.Plan plan) {
         List<Point> out = new ArrayList<>(points);
         double end = elapsed / 1e9;
-        for (int i = 0; i < points; i++) {
+        // The last point ends where the run did. A sliver of one (the run stopped just after a second began) would
+        // show a few messages as an enormous rate, so it is counted into the point before it.
+        int last = points - 1;
+        boolean sliver = last > 0 && end - (long) last * step < step / 4.0;
+        for (int i = 0; i < (sliver ? last : points); i++) {
             long t = (long) i * step;
-            double seconds = Math.max(0.001, Math.min(step, end - t));
-            if (i < points - 1 || end - t >= step) seconds = step;
+            boolean closing = i == (sliver ? last - 1 : last);
+            double seconds = closing ? Math.max(0.001, Math.max(end - t, sliver ? step : 0)) : step;
+            if (closing && !sliver && end - t >= step) seconds = step;
+            long sent = seriesSent[i], failed = seriesFailed[i], invalid = seriesInvalid[i];
+            if (closing && sliver) {
+                sent += seriesSent[last];
+                failed += seriesFailed[last];
+                invalid += seriesInvalid[last];
+            }
             Double target = plan.rate() <= 0 ? null : round((plan.dueBy(t + seconds) - plan.dueBy(t)) / seconds);
-            out.add(new Point(t, round(seconds), target, seriesSent[i], seriesFailed[i], seriesInvalid[i]));
+            out.add(new Point(t, round(seconds), target, sent, failed, invalid));
         }
         return out;
     }

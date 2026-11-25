@@ -216,6 +216,17 @@ public class Runs {
         }
     }
 
+    /** An arrival that named a message nobody had sent yet, as far as the run knew: where it arrived, and what the observer kept of it. */
+    private static final class Stray {
+        final int watch;
+        volatile Observer.Entry kept;
+        volatile Awaited claimed;
+
+        Stray(int watch) {
+            this.watch = watch;
+        }
+    }
+
     private final class Run {
         final String id = UUID.randomUUID().toString().substring(0, 8);
         final Instant startedAt = Instant.now();
@@ -246,9 +257,9 @@ public class Runs {
         final List<Awaited> awaited = new ArrayList<>();
         final Map<String, Awaited> pending = new LinkedHashMap<>();
         final Map<String, Awaited> byId = new HashMap<>();
-        final Map<String, int[]> strays = new LinkedHashMap<>() {   // correlation id -> the watch it arrived on
+        final Map<String, Stray> strays = new LinkedHashMap<>() {   // by correlation id
             @Override
-            protected boolean removeEldestEntry(Map.Entry<String, int[]> eldest) {
+            protected boolean removeEldestEntry(Map.Entry<String, Stray> eldest) {
                 return size() > KEPT_STRAYS;
             }
         };
@@ -394,8 +405,12 @@ public class Runs {
         void sentAs(Awaited a, String messageId) {
             synchronized (awaited) {
                 byId.put(messageId, a);
-                int[] early = strays.remove(messageId);
-                if (early != null && a.watch < 0 && pending.get(a.token) == a) settle(a, early[0], System.nanoTime());
+                Stray early = strays.remove(messageId);
+                if (early != null && a.watch < 0 && pending.get(a.token) == a) {
+                    settle(a, early.watch, System.nanoTime());
+                    early.claimed = a;
+                    if (early.kept != null) early.kept.message = a.n;   // the list of arrivals learns which message it was
+                }
             }
         }
 
@@ -430,6 +445,7 @@ public class Runs {
             long now = System.nanoTime();
             Long message = null;
             String correlation = arrival.correlationId();
+            Stray stray = null;
             synchronized (awaited) {
                 Awaited found = null;
                 for (Awaited a : pending.values()) {
@@ -438,14 +454,19 @@ public class Runs {
                 if (found == null && correlation != null && verifying) {
                     found = byId.get(correlation);
                     if (found != null && pending.get(found.token) != found) found = null;   // it has arrived already
-                    else if (found == null) strays.put(correlation, new int[] {watch});
+                    else if (found == null) strays.put(correlation, stray = new Stray(watch));
                 }
                 if (found != null) {
                     settle(found, watch, now);
                     message = found.n;
                 }
             }
-            observers.get(watch).arrived(arrival, message);
+            Observer.Entry kept = observers.get(watch).arrived(arrival, message);
+            if (stray != null) {
+                stray.kept = kept;
+                Awaited late = stray.claimed;   // its send returned between the two steps above
+                if (late != null) kept.message = late.n;
+            }
             totals.arrivals(watches.get(watch)).increment();
         }
 

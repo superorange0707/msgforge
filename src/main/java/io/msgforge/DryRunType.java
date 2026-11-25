@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
  *
  * What is sent to ORDERS.IN is delivered on ORDERS.OUT when it is well-formed JSON or XML, and otherwise a small
  * reject message ({"reason":"empty"}, "not-json", "not-xml" or "not-a-format") is delivered on ORDERS.REJECTED, with
- * the original's headers and one more named reason. Several routes are separated by semicolons.
+ * the original's headers, one more named reason, and the original's message id as its correlation id, which is
+ * how a run recognises the reject of a message whose body was emptied. Several routes are separated by semicolons.
  */
 @Component
 @Order(0)
@@ -124,7 +125,9 @@ public class DryRunType implements TransportType {
                 } else if (route.invalidTo() != null) {
                     Map<String, String> rejected = new LinkedHashMap<>(headers);
                     rejected.put("reason", flaw);
-                    deliver(route.invalidTo(), "{\"reason\":\"" + flaw + "\"}", rejected, id);
+                    // as a system that answers does: the reject names the message it is about as its correlation id
+                    if (id != null) rejected.put("JMSCorrelationID", id);
+                    deliver(route.invalidTo(), "{\"reason\":\"" + flaw + "\"}", rejected, null);
                 }   // with nowhere named for them, what is not well-formed is dropped
             }
         };

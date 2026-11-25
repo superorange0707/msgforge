@@ -265,15 +265,16 @@ final class Cli {
         if (!status.equals("DONE")) {
             errors++;
             cases.add(testcase(name, seconds, "<error message=\"" + xml(status + ": " + run.path("error").asText("")) + "\"/>"));
-        } else if (run.path("checks").isEmpty()) {
-            long failed = run.path("failed").asLong();
-            if (failed > 0) failures++;
-            cases.add(testcase(name, seconds, failed == 0 ? "" : "<failure message=\"" + xml(failed + " of " + (failed + run.path("sent").asLong()) + " sends failed") + "\"/>"));
         } else {
             for (JsonNode c : run.path("checks")) {
                 if (!passed(c)) failures++;
-                cases.add(testcase(checkName(c), seconds, passed(c) ? "" : "<failure message=\"" + xml("arrived " + c.path("arrived").asInt() + " of "
-                        + c.path("sent").asInt() + ", misrouted " + c.path("misrouted").asInt() + ", missing " + c.path("missing").asInt()) + "\"/>"));
+                cases.add(testcase(checkName(c), seconds, passed(c) ? "" : "<failure message=\"" + xml(counts(c)) + "\"/>"));
+            }
+            // Sends that failed make the run a FAIL whatever arrived, so they are a test case of their own; so is a run with nothing else to show.
+            long failed = run.path("failed").asLong();
+            if (failed > 0) failures++;
+            if (failed > 0 || cases.isEmpty()) {
+                cases.add(testcase(name, seconds, failed == 0 ? "" : "<failure message=\"" + xml(failed + " of " + (failed + run.path("sent").asLong()) + " sends failed") + "\"/>"));
             }
         }
         write(file, suite(name, seconds, cases, failures, errors));
