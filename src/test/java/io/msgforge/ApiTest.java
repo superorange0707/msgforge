@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -134,8 +135,22 @@ class ApiTest {
         mvc.perform(body(post("/api/preview"), preview).header("Origin", "null")).andExpect(status().isForbidden());
         mvc.perform(delete("/api/runs/x").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
         mvc.perform(body(put("/api/connections/x"), "{}").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
+        // a browser that says the request crosses sites is believed, whatever Origin says
+        mvc.perform(body(post("/api/preview"), preview).header("Sec-Fetch-Site", "cross-site")).andExpect(status().isForbidden());
+        mvc.perform(body(post("/api/preview"), preview).header("Sec-Fetch-Site", "same-site")).andExpect(status().isForbidden());
+        mvc.perform(body(post("/api/preview"), preview).header("Sec-Fetch-Site", "same-origin")).andExpect(status().isOk());
         // reads carry no Origin check: a browser does not let another site see the answer
         mvc.perform(get("/api/packs").header("Origin", "http://evil.example")).andExpect(status().isOk());
+    }
+
+    @Test
+    void noPageMayShowTheConsoleInAFrame() throws Exception {
+        for (String path : new String[] {"/index.html", "/api/packs"}) {
+            mvc.perform(get(path)).andExpect(header().string("X-Frame-Options", "DENY"))
+                    .andExpect(header().string("Content-Security-Policy", "frame-ancestors 'none'"))
+                    .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+        }
+        mvc.perform(get("/api/packs").header("Host", "evil.example")).andExpect(header().string("X-Frame-Options", "DENY"));
     }
 
     @Test

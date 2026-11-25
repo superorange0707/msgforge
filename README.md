@@ -27,7 +27,7 @@ From source (the build is set up to fetch JDK 17 when the machine only has anoth
 
 Open http://localhost:8585. Pick a template, keep the `Dry run` connection, press Send.
 
-The console has no login. It listens on 127.0.0.1 only, and it answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]`, so a web page open in the same browser cannot reach it under another name or post to it from another site. Keep it on your own machine, or see [Running in a container](#running-in-a-container).
+The console has no login. It listens on 127.0.0.1 only, and it answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]`, so a web page open in the same browser cannot reach it under another name, post to it from another site, or show it in a frame. Keep it on your own machine, or see [Running in a container](#running-in-a-container).
 
 ## Everything is configured in the console
 
@@ -168,8 +168,10 @@ If the consumer is not a JMS application, use a destination like `queue:///MY.QU
 
 ```bash
 docker build -t msgforge .
-docker run -p 8585:8585 -v msgforge-data:/data msgforge
+docker run -p 127.0.0.1:8585:8585 -v msgforge-data:/data msgforge
 ```
+
+`127.0.0.1:` keeps the port on this machine. Without it Docker publishes it on every network interface, and anyone on the network could use the saved connections.
 
 The image runs as a non-root user and keeps everything the console changes on the `/data` volume: `msgforge.json` and the packs in `/data/packs`. On a volume with no packs yet, the first start copies the bundled ones there, so they can be edited like any other; later starts, and newer images, leave that folder alone. The Kafka plugin is in `/app/plugins`.
 
@@ -183,7 +185,7 @@ The image runs as a non-root user and keeps everything the console changes on th
 | `MSGFORGE_ENV_ALLOW` | environment variables a connection may name besides `MSGFORGE_*`, for example `MQ_*,KAFKA_*` | none | |
 | `MSGFORGE_ALLOWED_HOSTS` | host names the console answers to besides `localhost`, comma-separated; `*` for any | none | |
 
-With the port published as above the console is at http://localhost:8585 and needs nothing more. Reached under any other name, for example `msgforge.internal` behind a proxy, it answers 403 until that name is in `MSGFORGE_ALLOWED_HOSTS`. The proxy has to pass the original `Host` header on: a write is accepted only when the browser's `Origin` matches it. `*` turns the host check off, which is only safe where nothing untrusted can reach the port.
+With the port published as above the console is at http://localhost:8585, for you only. Reached under any other name, for example `msgforge.internal` behind a proxy, it answers 403 until that name is in `MSGFORGE_ALLOWED_HOSTS`. The proxy has to pass the original `Host` header on: a write is accepted only when the browser's `Origin` matches it. `*` turns the host check off, which is only safe where nothing untrusted can reach the port.
 
 msgforge has no login: anyone who can reach the port can send messages with the saved connections, and can read the environment variables connections are allowed to name, so expose it only behind your platform's access control.
 

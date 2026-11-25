@@ -1,6 +1,6 @@
 # Builds the same zip a release ships, then runs what is in it.
 #   docker build -t msgforge .
-#   docker run -p 8585:8585 -v msgforge-data:/data msgforge
+#   docker run -p 127.0.0.1:8585:8585 -v msgforge-data:/data msgforge
 
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /src
@@ -16,7 +16,8 @@ RUN groupadd --system --gid 10001 msgforge \
  && useradd --system --uid 10001 --gid msgforge --home-dir /app msgforge \
  && mkdir /data \
  && chown msgforge:msgforge /data
-COPY --from=build --chown=msgforge:msgforge /out/msgforge /app
+# The application stays root's and read-only to the process; only /data is writable.
+COPY --from=build /out/msgforge /app
 WORKDIR /app
 # Reachable from outside the container; who may reach it is the platform's job (msgforge has no login).
 # Everything the console changes is on the volume: msgforge.json and the packs.
