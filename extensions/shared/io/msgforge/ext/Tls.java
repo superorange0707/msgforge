@@ -11,8 +11,10 @@ import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
 
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 
 /**
@@ -44,20 +46,26 @@ public final class Tls {
      */
     // ponytail: a client certificate has to be in a key store (PKCS12 or JKS); a PEM key and certificate pair is not read.
     public static SSLContext context(Map<String, String> s) throws Exception {
-        TrustManagerFactory trust = null;
-        if (!blank(s, "trustStore")) {
-            trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            trust.init(trustStore(s.get("trustStore").trim(), s.getOrDefault("trustStorePassword", "")));
-        }
-        KeyManagerFactory keys = null;
-        if (!blank(s, "keyStore")) {
-            String password = s.getOrDefault("keyStorePassword", "");
-            keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            keys.init(keyStore("Key store", s.get("keyStore").trim(), password), password.toCharArray());
-        }
         SSLContext context = SSLContext.getInstance("TLS");
-        context.init(keys == null ? null : keys.getKeyManagers(), trust == null ? null : trust.getTrustManagers(), null);
+        context.init(keyManagers(s), trustManagers(s), null);
         return context;
+    }
+
+    /** From the trust store setting, or null when it is not set. */
+    public static TrustManager[] trustManagers(Map<String, String> s) throws Exception {
+        if (blank(s, "trustStore")) return null;
+        TrustManagerFactory trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trust.init(trustStore(s.get("trustStore").trim(), s.getOrDefault("trustStorePassword", "")));
+        return trust.getTrustManagers();
+    }
+
+    /** From the key store setting, or null when it is not set. */
+    public static KeyManager[] keyManagers(Map<String, String> s) throws Exception {
+        if (blank(s, "keyStore")) return null;
+        String password = s.getOrDefault("keyStorePassword", "");
+        KeyManagerFactory keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keys.init(keyStore("Key store", s.get("keyStore").trim(), password), password.toCharArray());
+        return keys.getKeyManagers();
     }
 
     /** The default context when nothing is set, so a caller can always hand one to its client. */

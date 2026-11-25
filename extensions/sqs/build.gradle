@@ -1,0 +1,27 @@
+// Amazon SQS as a msgforge plugin, through the AWS SDK for Java 2 (the SQS module only).
+// `./gradlew :extensions:sqs:installPlugin` puts it in plugins/.
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+        mavenBom 'software.amazon.awssdk:bom:2.59.9'
+    }
+}
+
+apply from: rootProject.file('extensions/plugin.gradle')
+
+dependencies {
+    implementation('software.amazon.awssdk:sqs') {
+        exclude group: 'org.slf4j'                            // logging goes through msgforge's own slf4j
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'      // the JDK's own HTTP client below instead
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'   // no async client is used
+    }
+    implementation('software.amazon.awssdk:url-connection-client') {
+        exclude group: 'org.slf4j'
+    }
+}

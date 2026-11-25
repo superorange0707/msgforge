@@ -52,11 +52,36 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 | `qpid-jms-client`, `proton-j` | Apache Qpid JMS, Apache Qpid Proton-J | Apache-2.0 |
 | `netty-buffer`, `netty-codec`, `netty-codec-http`, `netty-common`, `netty-handler`, `netty-resolver`, `netty-transport`, `netty-transport-native-unix-common` | Netty | Apache-2.0 |
 
+## In the Amazon SQS plugin (`plugins/msgforge-sqs-*.jar`)
+
+| Jars | Project | Licence |
+|---|---|---|
+| `sqs`, `annotations`, `auth`, `aws-core`, `aws-json-protocol`, `checksums`, `checksums-spi`, `endpoints-spi`, `eventstream`, `http-auth`, `http-auth-aws`, `http-auth-aws-eventstream`, `http-auth-spi`, `http-client-spi`, `identity-spi`, `json-utils`, `metrics-spi`, `profiles`, `protocol-core`, `regions`, `retries`, `retries-spi`, `sdk-core`, `url-connection-client`, `utils`, `utils-lite` | AWS SDK for Java 2 | Apache-2.0 |
+| `third-party-jackson-core` | AWS SDK for Java 2 (a repackaged Jackson core) | Apache-2.0; includes FastDoubleParser (MIT), its licence files are in the jar |
+| `reactive-streams` | Reactive Streams | MIT-0, text below |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.
 
 ## Licence texts and notices no jar brings
+
+### Reactive Streams (MIT No Attribution)
+
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to deal in the Software
+without restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ### Bouncy Castle
 

@@ -71,3 +71,26 @@ Headers become JMS string properties, which Qpid JMS sends as AMQP application p
 Receiving consumes, like IBM MQ: every message on the queue is taken off it, including ones msgforge did not send. Expect on queues that nothing else reads. A connection that breaks while a run verifies fails the run. With a `failover:` URI the client reconnects instead, and messages that arrive meanwhile can be missed.
 
 Verified against RabbitMQ 4.4.1 (its built-in AMQP 1.0, the `rabbitmq:4` image): sending and receiving on `/queues/…` addresses, an unknown address refused at the send, a refused login, TLS with a PEM CA file and a client certificate, the host name check. The unit tests use an embedded ActiveMQ Artemis 2.40 broker with a login: properties and correlation id arrive, a wrong password is refused, a broker that stops fails a receiver. Not tried against ActiveMQ Classic, Azure Service Bus or Solace.
+
+## Amazon SQS
+
+Amazon SQS, or anything that answers its API (ElasticMQ, LocalStack), through the AWS SDK for Java 2: only its SQS module, with the JDK's own HTTP client.
+
+| Setting | Notes |
+|---|---|
+| Region | for example `eu-west-1`. Required; ElasticMQ takes any name. |
+| Endpoint | empty for AWS. `http://localhost:9324` for ElasticMQ, `http://localhost:4566` for LocalStack. A trust store or key store needs an `https://` endpoint. |
+| Access key ID, Secret access key | required. Write them as `${MSGFORGE_AWS_ACCESS_KEY_ID}` and `${MSGFORGE_AWS_SECRET_ACCESS_KEY}` to keep them out of `msgforge.json`. |
+| Session token | for temporary credentials |
+
+Credentials come from the connection only. The SDK's usual sources (the `AWS_*` environment variables, `~/.aws`, an instance or task role) are not used, on purpose: anyone who can edit a connection could otherwise point it at an endpoint of their choosing and have it sign requests with this machine's identity. The SDK may still read `~/.aws/config` for settings that are not credentials, such as retry mode.
+
+The destination is a queue name (looked up once per run) or a queue URL. Each send waits for SQS to accept the message.
+
+Headers become message attributes of type `String`. SQS allows 10 per message and restricts their names (letters, digits, `-`, `_`, `.`; not starting with `AWS.` or `Amazon.`); a header it does not accept fails the send with SQS's own message. Two headers are not attributes: `MessageGroupId` and `MessageDeduplicationId` set those parameters. A queue whose name ends in `.fifo` gets the group `msgforge` and a new deduplication id per message when the headers do not say otherwise, so the queue keeps the send order and a repeated body is not dropped.
+
+Receiving polls the queue (up to 10 messages, waiting up to 2 seconds per call), hands each body on and then deletes the batch. It consumes, like IBM MQ: other consumers of the queue compete for the same messages, and what msgforge receives is gone. A receive or delete that fails (the queue was deleted, the credentials stopped working) fails the run.
+
+Test connection lists one queue. An "access denied" answer also passes, since only valid credentials get that far; a user allowed to send to one queue usually may not list them.
+
+Verified against ElasticMQ 1.7.1 (the `softwaremill/elasticmq` image): sending by name and by URL, attributes, receiving and deleting, a FIFO queue, a missing queue. ElasticMQ accepts any credentials and has no TLS, so signing, refused credentials and TLS were not checked against a server, and nothing was tried against AWS itself or LocalStack.
