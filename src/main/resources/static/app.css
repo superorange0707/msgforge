@@ -8,6 +8,7 @@
   --grad: linear-gradient(135deg, #00b2f0 0%, #0086d1 48%, #0057a3 100%);
   --ok: #3ddc97; --bad: #ff7b88; --warn: #f5c259;
   --t-tag: #9dc1ff; --t-attr: #7fe0d2; --t-str: #a5e8b0; --t-num: #ffd58a; --t-kw: #ff9ec0; --t-pun: #5d7f97; --t-com: #5d7f97;
+  --stick: linear-gradient(rgba(6, 30, 46, 0), #061e2e 10px);
   --shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 28px 56px -32px rgba(0, 0, 0, .9);
   --glow: radial-gradient(900px 460px at 82% -10%, rgba(0, 174, 239, .22), transparent 62%), radial-gradient(760px 460px at -6% -4%, rgba(0, 87, 163, .32), transparent 60%);
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -20,6 +21,7 @@
   --text: #05263b; --muted: #557085; --faint: #98adbc;
   --accent: #0076b6; --accent-soft: rgba(0, 174, 239, .13); --accent-line: rgba(0, 150, 214, .6);
   --ok: #0e9a72; --bad: #d6364a; --warn: #a87400;
+  --stick: linear-gradient(rgba(250, 252, 254, 0), #fafcfe 10px);
   --shadow: 0 1px 2px rgba(0, 57, 93, .05), 0 22px 40px -28px rgba(0, 57, 93, .3);
   --glow: radial-gradient(820px 480px at 88% -8%, rgba(0, 174, 239, .28), transparent 64%), radial-gradient(720px 520px at -8% -6%, rgba(0, 87, 163, .15), transparent 62%), radial-gradient(700px 500px at 60% 112%, rgba(0, 174, 239, .11), transparent 60%);
 }
@@ -92,7 +94,8 @@ kbd { font: 500 10.5px var(--sans); color: var(--muted); background: var(--inset
 .btn:disabled { opacity: .4; cursor: default; }
 .btn.ghost { background: none; border-color: transparent; color: var(--muted); }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); border-color: var(--line); }
-.btn.ghost[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+/* pressed looks the same whether the pointer is on it or not: hovering the last toggle clicked must not make it look different from the others */
+.btn.ghost[aria-pressed="true"], .btn.ghost[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .btn.primary { background: var(--grad); border-color: transparent; color: #fff; box-shadow: 0 8px 20px -10px rgba(0, 110, 190, .9), 0 1px 0 rgba(255, 255, 255, .3) inset; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: transparent; }
 .btn.danger { color: var(--bad); }
@@ -179,6 +182,8 @@ form.send-card .seg { display: grid; }
 @keyframes pulse { 50% { opacity: .45; } }
 .conn { display: flex; align-items: center; gap: 8px; padding: 0 4px; font: 11.5px var(--mono); color: var(--muted); }
 .conn span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* Send stays in reach however many blocks are open above it: it sticks to the bottom of the column */
+.send-card > .pair:last-child { position: sticky; bottom: 0; z-index: 2; margin: 0 -12px -12px; padding: 10px 12px 12px; border-radius: 0 0 14px 14px; background: var(--stick); }
 .send { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; height: 42px; border: 0; border-radius: 11px; background: var(--grad); color: #fff; font-size: 14px; font-weight: 650; box-shadow: 0 12px 28px -12px rgba(0, 110, 190, .95), 0 1px 0 rgba(255, 255, 255, .32) inset; transition: transform .08s, filter .15s; }
 .send:hover { filter: brightness(1.08) saturate(1.05); }
 .send:active { transform: scale(.985); }
@@ -202,6 +207,7 @@ form.send-card .seg { display: grid; }
 .run .facts b { font-weight: inherit; color: var(--bad); }
 .run.endless.RUNNING .meter i { width: 100% !important; }
 .scn .badge { position: absolute; right: 34px; top: 8px; font: 600 10.5px var(--sans); color: var(--accent); background: var(--accent-soft); border-radius: 99px; padding: 0 6px; pointer-events: none; }
+.scn.off .badge { color: var(--muted); background: var(--inset); }
 .scn.bad .badge { color: var(--bad); background: color-mix(in srgb, var(--bad) 13%, transparent); }
 .chip { display: inline-flex; align-items: center; gap: 6px; font: 650 9.5px var(--sans); letter-spacing: .07em; padding: 3px 7px; border-radius: 99px; color: var(--muted); background: var(--inset); }
 .chip.RUNNING, .chip.VERIFYING { color: var(--accent); background: var(--accent-soft); }

@@ -985,7 +985,7 @@ function renderRunDetail(d) {
   const tiles = el('div', 'tiles');
   tiles.append(tile('sent', r.sent.toLocaleString()), tile('failed', r.failed.toLocaleString(), r.failed > 0));
   if (Object.keys(r.faults).length) tiles.append(tile('invalid', r.invalid.toLocaleString()));
-  tiles.append(tile(r.targetRate != null ? 'a second, of ' + rate(r.targetRate) : 'a second', rate(r.actualRate)), tile('sending', lasted(r.elapsedMs)));
+  tiles.append(tile(r.targetRate != null ? 'rate · target ' + rate(r.targetRate) + '/s' : 'rate', rate(r.actualRate) + '/s'), tile('sending', lasted(r.elapsedMs)));
   if (r.latency) tiles.append(tile('send p50', r.latency.p50 + ' ms'), tile('send p95', r.latency.p95 + ' ms'), tile('send p99', r.latency.p99 + ' ms'));
   const parts = [tiles];
   if (r.error) parts.push(el('div', 'result bad', r.error));
@@ -1017,22 +1017,21 @@ function renderRunDetail(d) {
 function renderMonitorDetail(m) {
   const parts = [];
   if (m.error) parts.push(el('div', 'result bad', m.error + (m.retryAt ? ' Next try at ' + time(m.retryAt) + '.' : '')));
-  parts.push(watchPanel(m.watch), el('p', 'note', 'Receiving takes the messages off a queue. Since ' + time(m.watch.since) + '.'));
-  // the buttons are built once per monitor; whether it is saved is repainted every time
-  showDetail(m.name || m.watch.connection + ' / ' + m.watch.destination, m.state === 'up' ? 'RUNNING' : m.state === 'down' ? 'FAILED' : 'VERIFYING', () => {
-    const save = el('button', 'btn hold', 'Saved'), reset = el('button', 'btn', 'Reset'), stop = el('button', 'btn danger', 'Stop');
-    save.type = reset.type = stop.type = 'button'; save.id = 'monitorSaved'; save.title = 'Keep it in msgforge.json: it then starts with msgforge';
+  parts.push(watchPanel(m.watch), el('p', 'note', 'Since ' + time(m.watch.since)));
+  // the buttons are built once per monitor; what they say is repainted every time
+  showDetail(m.name || m.watch.connection + ' / ' + m.watch.destination, { up: 'RUNNING', down: 'FAILED', stopped: 'CANCELLED' }[m.state] || 'VERIFYING', () => {
+    const save = el('button', 'btn hold', 'Saved'), reset = el('button', 'btn', 'Reset'), stop = el('button', 'btn');
+    save.type = reset.type = stop.type = 'button'; save.id = 'monitorSaved'; stop.id = 'monitorStop'; save.title = 'Keep it in msgforge.json: it then starts with msgforge';
     const failed = e => toast(e.message, true), now = () => state.monitors.find(x => x.id === m.id);
     save.onclick = () => api('/monitors/' + m.id + '/saved', { method: now()?.saved ? 'DELETE' : 'PUT' }).then(loadMonitors).then(refreshOpen, failed);
     reset.onclick = () => api('/monitors/' + m.id + '/reset', { method: 'POST' }).then(loadMonitors).then(refreshOpen, failed);
-    stop.onclick = async () => {
-      if (now()?.saved && !await ask({ title: 'Stop this monitor?', text: 'It is saved, and is removed from msgforge.json as well.', ok: 'Stop', danger: true })) return;
-      api('/monitors/' + m.id, { method: 'DELETE' }).then(() => { $('detail').close(); loadMonitors(); }, failed);
-    };
+    // a saved monitor that is stopped stays, and can be started again; one that is not saved is gone when stopped
+    stop.onclick = () => (now()?.state === 'stopped' ? api('/monitors/' + m.id + '/start', { method: 'POST' }) : api('/monitors/' + m.id, { method: 'DELETE' })).then(loadMonitors).then(refreshOpen, failed);
     return [save, reset, stop];
   }, parts);
-  $('detailChip').textContent = m.state === 'up' ? 'LISTENING' : m.state === 'down' ? 'DOWN' : 'STARTING';
+  $('detailChip').textContent = { up: 'LISTENING', down: 'DOWN', stopped: 'STOPPED' }[m.state] || 'STARTING';
   $('monitorSaved')?.setAttribute('aria-pressed', m.saved);
+  if ($('monitorStop')) { $('monitorStop').textContent = m.state === 'stopped' ? 'Start' : 'Stop'; $('monitorStop').className = 'btn' + (m.state === 'stopped' ? '' : ' danger'); }
 }
 async function refreshOpen() {
   const open = state.open;
@@ -1048,8 +1047,13 @@ $('detail').addEventListener('close', () => { state.open = null; $('detailActs')
 
 // ---- monitors: a destination watched outside any run
 let newBuckets = [];
+let monitorsAsked = 0;
 async function loadMonitors() {
-  state.monitors = await api('/monitors');
+  // The list is asked for every second and after every action. An answer that was overtaken by a later question is dropped,
+  // or a monitor just stopped would be painted as listening again by the answer to the question asked before the stop.
+  const asked = ++monitorsAsked, answer = await api('/monitors');
+  if (asked !== monitorsAsked) return;
+  state.monitors = answer;
   const box = $('monitors'), have = new Map([...box.children].map(c => [c.dataset.id, c]));
   for (const m of state.monitors) {
     let row = have.get(m.id);
@@ -1057,17 +1061,19 @@ async function loadMonitors() {
       row = el('div', 'scn'); row.dataset.id = m.id;
       const open = el('button', 'tpl'), stop = el('button', 'play');
       open.append(el('span', 'name', m.name || m.watch.destination)); open.title = m.watch.connection + ' / ' + m.watch.destination; open.onclick = () => openMonitor(m.id);
-      stop.innerHTML = icon('x'); stop.title = 'Stop watching'; stop.setAttribute('aria-label', 'Stop watching ' + (m.name || m.watch.destination));
-      stop.onclick = async () => {
-        const saved = state.monitors.find(x => x.id === m.id)?.saved;
-        if (saved && !await ask({ title: 'Stop this monitor?', text: 'It is saved, and is removed from msgforge.json as well.', ok: 'Stop', danger: true })) return;
-        api('/monitors/' + m.id, { method: 'DELETE' }).then(loadMonitors, e => toast(e.message, true));
-      };
+      // the button stops a monitor that is listening and starts one that was stopped; taking a saved one out of the file is the Saved button in its view
+      stop.onclick = () => (state.monitors.find(x => x.id === m.id)?.state === 'stopped' ? api('/monitors/' + m.id + '/start', { method: 'POST' }) : api('/monitors/' + m.id, { method: 'DELETE' }))
+        .then(loadMonitors, e => toast(e.message, true));
       row.append(open, el('span', 'badge'), stop); box.append(row);
     }
     have.delete(m.id);
-    row.classList.toggle('bad', m.state === 'down');
-    row.querySelector('.badge').textContent = m.state === 'down' ? 'down' : m.watch.count.toLocaleString();
+    row.classList.toggle('bad', m.state === 'down'); row.classList.toggle('off', m.state === 'stopped');
+    row.querySelector('.badge').textContent = m.state === 'down' ? 'down' : m.state === 'stopped' ? 'stopped' : m.watch.count.toLocaleString();
+    const stopped = m.state === 'stopped', toggle = row.querySelector('.play'), what = m.name || m.watch.destination;
+    if (toggle.dataset.stopped !== String(stopped)) {   // only when it changes, so the button under the pointer is not rebuilt every second
+      toggle.dataset.stopped = stopped; toggle.innerHTML = icon(stopped ? 'play' : 'x');
+      toggle.title = stopped ? 'Start watching' : 'Stop watching'; toggle.setAttribute('aria-label', (stopped ? 'Start watching ' : 'Stop watching ') + what);
+    }
     row.querySelector('.tpl').title = m.watch.connection + ' / ' + m.watch.destination + (m.error ? '\n' + m.error : '');
   }
   have.forEach(row => row.remove());
