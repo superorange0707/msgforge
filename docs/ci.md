@@ -40,13 +40,13 @@ Keep the `msgforge.json` with the connections and scenarios the pipeline uses, a
 Needs Java 17 or newer on the machine.
 
 ```bash
-unzip -q msgforge-0.1.0.zip -d "$RUNNER_TEMP"     # or: ./gradlew dist in a checkout of msgforge
+unzip -q msgforge-0.2.0.zip -d "$RUNNER_TEMP"     # or: ./gradlew dist in a checkout of msgforge
 export MSGFORGE_CONFIG="$PWD/msgforge/msgforge.json" MSGFORGE_PACKS="$PWD/msgforge/packs"
 export MSGFORGE_KAFKA_PASSWORD="…"                # from the pipeline's secrets
 
 # 1. start the system under test (your own step), then
 # 2. run the scenario; the exit code decides the step
-"$RUNNER_TEMP/msgforge-0.1.0/bin/msgforge" run "Order routing" --report build/test-results/msgforge.xml
+"$RUNNER_TEMP/msgforge-0.2.0/bin/msgforge" run "Order routing" --report build/test-results/msgforge.xml
 ```
 
 `$RUNNER_TEMP` stands for any scratch folder. The bundled `plugins/` folder, with Kafka, is used unless `MSGFORGE_PLUGINS` says otherwise.

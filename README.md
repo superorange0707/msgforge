@@ -11,7 +11,7 @@ It ships with IBM MQ and HTTP connection types, a dry-run type that needs no bro
 From a release: unzip `msgforge-<version>.zip` and start it. The zip holds the application, the bundled packs and the plugins.
 
 ```bash
-msgforge-0.1.0/bin/msgforge
+msgforge-0.2.0/bin/msgforge
 ```
 
 On Windows it is `bin\msgforge.bat`. It needs Java 17 or newer, found on the `PATH` or through `JAVA_HOME`. `packs/`, `plugins/` and `msgforge.json` are the ones in the unzipped folder; the scripts go there first, and so should you if you run `java -jar msgforge.jar` yourself.

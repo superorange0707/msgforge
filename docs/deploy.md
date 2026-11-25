@@ -44,10 +44,10 @@ The scenarios are easiest to make in the console against a test environment (see
 
 ### Your image
 
-Build msgforge's own image from the release you use (`docker build -t registry.example.internal/msgforge:0.1.0 .` in a checkout of that tag) and push it to your registry once per version. Your image adds your files on top:
+Build msgforge's own image from the release you use (`docker build -t registry.example.internal/msgforge:0.2.0 .` in a checkout of that tag) and push it to your registry once per version. Your image adds your files on top:
 
 ```dockerfile
-FROM registry.example.internal/msgforge:0.1.0
+FROM registry.example.internal/msgforge:0.2.0
 # Owned by root, so msgforge can use these packs but not change them: changes come through Git.
 COPY packs /app/team-packs
 # Copied to /data/msgforge.json on a volume that does not have one yet.
@@ -187,6 +187,6 @@ docker run --rm -p 127.0.0.1:8585:8585 -v msgforge-data:/data --env-file env/tes
   -e MSGFORGE_KAFKA_PASSWORD registry.example.internal/team/msgforge:2026.11.1
 ```
 
-or, to edit packs in the repository directly, the release zip: `MSGFORGE_PACKS=$PWD/packs MSGFORGE_CONFIG=$PWD/msgforge.json msgforge-0.1.0/bin/msgforge`. Changes made in the console are then files in your checkout, to commit like any other. Keep passwords as `${MSGFORGE_…}` references in the console too: a password typed in is saved into `msgforge.json`.
+or, to edit packs in the repository directly, the release zip: `MSGFORGE_PACKS=$PWD/packs MSGFORGE_CONFIG=$PWD/msgforge.json msgforge-0.2.0/bin/msgforge`. Changes made in the console are then files in your checkout, to commit like any other. Keep passwords as `${MSGFORGE_…}` references in the console too: a password typed in is saved into `msgforge.json`.
 
 **Pipelines.** `msgforge run <scenario> --report msgforge.xml` with the same configuration, or `--url` against the shared instance; [ci.md](ci.md) has the details and examples.
