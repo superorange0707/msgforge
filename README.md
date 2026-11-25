@@ -27,6 +27,8 @@ From source (the build is set up to fetch JDK 17 when the machine only has anoth
 
 Open http://localhost:8585. Pick a template, keep the `Dry run` connection, press Send.
 
+To try it with a real broker, [examples/quickstart](examples/quickstart/) starts msgforge and Kafka with `docker compose up` and has a scenario that passes. For a team setting it up in its own environments, see [docs/deploy.md](docs/deploy.md).
+
 The console has no login. It listens on 127.0.0.1 only, and it answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]`, so a web page open in the same browser cannot reach it under another name, post to it from another site, or show it in a frame. Keep it on your own machine, or see [Running in a container](#running-in-a-container).
 
 ## Everything is configured in the console
@@ -173,7 +175,7 @@ docker run -p 127.0.0.1:8585:8585 -v msgforge-data:/data msgforge
 
 `127.0.0.1:` keeps the port on this machine. Without it Docker publishes it on every network interface, and anyone on the network could use the saved connections.
 
-The image runs as a non-root user and keeps everything the console changes on the `/data` volume: `msgforge.json` and the packs in `/data/packs`. On a volume with no packs yet, the first start copies the bundled ones there, so they can be edited like any other; later starts, and newer images, leave that folder alone. The Kafka plugin is in `/app/plugins`.
+The image runs as a non-root user and keeps everything the console changes on the `/data` volume: `msgforge.json` and the packs in `/data/packs`. On a volume with no packs yet, the first start copies the bundled ones there, so they can be edited like any other; later starts, and newer images, leave that folder alone. The same goes for `/app/msgforge.json`, if an image built on this one puts one there: it becomes the first `/data/msgforge.json`. The Kafka plugin is in `/app/plugins`. Arguments after the image name go to msgforge, so `docker run … msgforge run <scenario>` runs a scenario (see [Command line](#command-line)).
 
 | Variable | Purpose | Default | In the image |
 |---|---|---|---|
@@ -191,7 +193,7 @@ msgforge has no login: anyone who can reach the port can send messages with the 
 
 A pack folder msgforge may not write to (mounted read-only, or owned by another user) can be used but not changed; the console says the pack is read-only.
 
-The image was built and tried once by hand (Docker 28 on arm64): non-root process, packs seeded onto the volume, edits and connections kept across a new container, `docker stop` in under a second. There is no automated test for it.
+The image has been tried by hand (Docker 28 on arm64), most recently with the quick start: non-root process, the application read-only to it, packs and `msgforge.json` seeded onto the volume, the Kafka plugin loaded, edits and connections kept across a restart, `docker stop` in under a second, and with a read-only root file system. There is no automated test for it. [docs/deploy.md](docs/deploy.md) covers a shared instance, a proxy with sign-on and Kubernetes.
 
 ## Sending to several brokers at once
 
@@ -255,6 +257,17 @@ If one message arrives more than once, its first arrival counts. A message that 
 | HTTP | cannot receive |
 
 Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.
+
+## Command line
+
+The same program runs a saved scenario without the console, for a pipeline:
+
+```bash
+bin/msgforge run "Order routing" --report build/msgforge.xml   # by name or id
+bin/msgforge list
+```
+
+It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify), `1` when a check failed and `2` for anything else. `--report` writes JUnit XML, `--count` and `--rate` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
 
 ## Extending msgforge
 
