@@ -4,7 +4,7 @@ The release zip carries these in `plugins/`. Each is one jar with its client lib
 
 What they share:
 
-- **Addresses** are URIs. A user name or password written into one (`amqp://user:pw@host`) is refused: they go in the User and Password fields, which keep the password out of the console and out of error messages. So is a URI option that turns certificate checks off.
+- **Addresses** are URIs. A user name or password written into one (`amqp://user:pw@host`) is refused: they go in the User and Password fields, which keep the password out of the console and out of error messages. So is a URI option that names a user or password, a trust store or key store, or turns certificate checks off, also when its name is percent-encoded.
 - **TLS** is on when the URI says so (`amqps://`, `ssl://`, `tls://`, `https://`, `pulsar+ssl://`). The server certificate and its host name are always checked; there is no setting to turn that off. Without a trust store the JVM's default one is used. *Trust store file* is a JKS or PKCS12 store, or a PEM or DER file with the CA certificates. *Key store file* (JKS or PKCS12, not PEM) holds a client certificate, for servers that ask for one.
 - **Passwords**, tokens and secret keys are fields marked secret: written once, never shown again, and replaced by `***` in errors. Any field can be `${MSGFORGE_…}`.
 - **Test connection** logs in and makes one round trip to the server. It sends nothing.
@@ -36,7 +36,7 @@ MQTT 5 or 3.1.1, through the Eclipse Paho clients.
 |---|---|
 | Server URI | `tcp://host:1883`, `ssl://host:8883` for TLS, or `ws://` / `wss://` for MQTT over WebSocket |
 | MQTT version | `5` (the default) or `3.1.1` |
-| Client ID | generated (`msgforge-` and 8 characters) when empty. A receiver connects separately with the same ID and `-r` added, so the two do not push each other off. |
+| Client ID | generated (`msgforge-` and 8 characters) when empty. A receiver connects separately with the same ID and `-r` added, so the two do not push each other off. With an ID of your own, do not run two runs on this connection at once: the second pair of clients would push the first off. |
 | User, Password | the server's login |
 | QoS | `0`, `1` (the default) or `2`, for sending and for subscribing |
 | Retain | `true` to publish retained messages |
@@ -59,7 +59,7 @@ Any broker that speaks AMQP 1.0, through Apache Qpid JMS: ActiveMQ Artemis, Acti
 
 | Setting | Notes |
 |---|---|
-| Broker URI | `amqp://host:5672`, `amqps://host:5671` for TLS, `amqpws://` / `amqpwss://` over WebSocket, or a Qpid JMS `failover:(amqps://a:5671,amqps://b:5671)` list. Other Qpid JMS URI options may be added (`?amqp.idleTimeout=…`), except ones that carry a password or turn certificate checks off. |
+| Broker URI | `amqp://host:5672`, `amqps://host:5671` for TLS, `amqpws://` / `amqpwss://` over WebSocket, or a Qpid JMS `failover:(amqps://a:5671,amqps://b:5671)` list. Other Qpid JMS URI options may be added (`?amqp.idleTimeout=…`), except ones that carry a user or password, name a trust store or key store, or turn certificate checks off: those are set in their own fields. |
 | User, Password | the SASL login. For Azure Service Bus: the shared access policy name and its key. |
 
 The destination is the address of a queue, written as the broker names it: `orders` on ActiveMQ Artemis and ActiveMQ, the queue or topic name on Azure Service Bus (a subscription is received as `topic/Subscriptions/name`), `/queues/orders` on RabbitMQ 4. ActiveMQ Artemis sends to the address as an anycast (queue) address; topics as such (`session.createTopic`) are not offered.

@@ -73,11 +73,19 @@ class AmqpTypeTest {
     }
 
     @Test
-    void theUriMayNotCarryALoginOrTurnCertificateChecksOff() {
+    void theUriMayNotCarryALoginOrTurnCertificateChecksOff() throws Exception {
         assertTrue(assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "amqp://u:S3CRET@h"))).getMessage().contains("own fields"));
         assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "amqp://h?jms.password=S3CRET")));
         assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "amqps://h?transport.trustAll=true")));
         assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "failover:(amqps://a,amqps://b)?failover.nested.transport.verifyHost=false")));
+        // clients decode option names, so an encoded name is the same option
+        for (String encoded : new String[] {"amqps://h?transport.verify%48ost=false", "amqps://h?transport.trust%41ll=true&transport.verify%48ost=false",
+                "amqps://h?transport.verify%2548ost=false", "failover:(amqps://a?transport.trust%41ll=true)", "amqps://h?transport.trustStoreLocation=/tmp/x",
+                "amqps://h?jms.pass%77ord=x", "failover:(amqps://u:p@a)", "amqps://h?jms.username=u"}) {
+            assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", encoded)), encoded);
+        }
+        // options that leave the checks alone still work, and so does a host name with such a word in it
+        AmqpType.factory(Map.of("uri", "failover:(amqps://trust-broker.example:5671)?failover.maxReconnectAttempts=3&amqp.idleTimeout=60000"));
         assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "amqp://h", "trustStore", "/ca.pem")));
         assertThrows(IllegalArgumentException.class, () -> AmqpType.factory(Map.of("uri", "http://h")));
     }

@@ -162,7 +162,7 @@ public class SqsType implements TransportType {
                 try {
                     sqs.listQueues(r -> r.maxResults(1));
                 } catch (AwsServiceException e) {
-                    if (e.awsErrorDetails() == null || !"AccessDenied".equals(e.awsErrorDetails().errorCode())) throw e;
+                    if (e.awsErrorDetails() == null || !String.valueOf(e.awsErrorDetails().errorCode()).startsWith("AccessDenied")) throw e;
                 }
             }
 

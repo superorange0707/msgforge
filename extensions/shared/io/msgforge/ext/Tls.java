@@ -121,15 +121,37 @@ public final class Tls {
         if (uri.getScheme() == null || java.util.Arrays.stream(schemes).noneMatch(uri.getScheme().toLowerCase(Locale.ROOT)::equals)) {
             throw new IllegalArgumentException(label + " must start with " + String.join("://, ", schemes) + "://");
         }
-        // the whole text, not the parsed parts: a failover:(…) URI is opaque and its options are not a query
-        String text = value.toLowerCase(Locale.ROOT);
-        if (uri.getRawUserInfo() != null || text.contains("password=")) {
+        // The whole text, not the parsed parts: a failover:(…) URI is opaque and its options are not a query. Decoded
+        // first, and until nothing changes, because clients decode option names: transport.verify%48ost is verifyHost.
+        String text = value;
+        for (String decoded = decode(text); !decoded.equals(text); decoded = decode(text)) text = decoded;
+        text = text.toLowerCase(Locale.ROOT);
+        if (uri.getRawUserInfo() != null || LOGIN.matcher(text).find()) {
             throw new IllegalArgumentException("Put the user and password in their own fields, not in " + label);
         }
-        if (text.contains("trustall") || text.contains("verifyhost") || text.contains("insecure")) {
-            throw new IllegalArgumentException(label + " may not change certificate checks; set Trust store file instead");
+        java.util.regex.Matcher option = OPTION.matcher(text);
+        while (option.find()) {
+            String name = option.group(1);
+            if (name.contains("password") || name.contains("username")) {
+                throw new IllegalArgumentException("Put the user and password in their own fields, not in " + label);
+            }
+            if (java.util.stream.Stream.of("trust", "verifyhost", "insecure", "keystore", "sslcontext").anyMatch(name::contains)) {
+                throw new IllegalArgumentException(label + " may not change certificate checks; set the trust and key store fields instead");
+            }
         }
         return uri;
+    }
+
+    private static final java.util.regex.Pattern LOGIN = java.util.regex.Pattern.compile("://[^/?#,()]*@");
+    private static final java.util.regex.Pattern OPTION = java.util.regex.Pattern.compile("[?&]\\s*([^=&?#()]+)=");
+
+    /** Percent-decoding only: '+' stays '+', and a malformed escape leaves the text as it is. */
+    private static String decode(String s) {
+        try {
+            return java.net.URLDecoder.decode(s.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            return s;
+        }
     }
 
     public static boolean blank(Map<String, String> s, String key) {
