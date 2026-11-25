@@ -53,7 +53,7 @@ public class Monitors {
     public record Saved(String id, String name, String connection, String destination, List<Observer.Bucket> buckets) {}
 
     /**
-     * state is "starting" (not tried yet), "up" or "down". A monitor that is down has the reason in error and, unless
+     * state is "starting" (not tried yet), "up", "down" or "stopped" (a saved one that was stopped by hand). A monitor that is down has the reason in error and, unless
      * the reason is something only an edit can mend, the time of its next attempt in retryAt.
      */
     public record View(String id, String name, String connectionId, Instant startedAt, String state, String error, Instant retryAt,
@@ -285,22 +285,51 @@ public class Monitors {
         return m.view();
     }
 
-    /** Takes it out of the configuration file. It goes on watching until it is stopped or msgforge is. */
+    /**
+     * Takes it out of the configuration file. A monitor that is watching goes on watching until it is stopped or
+     * msgforge is; one that was stopped has nothing left to be listed for, and goes.
+     */
     public View forget(String id) {
         Monitor m = find(id, true);
         m.saved = false;
+        View last = m.view();
+        if (m.stopped) {
+            synchronized (monitors) {
+                monitors.remove(m);
+            }
+        }
         persist();
-        return m.view();
+        return last;
     }
 
-    /** Stops the monitor and, if it was saved, takes it out of the configuration file. */
+    /**
+     * Stops the monitor listening. One that is not saved is gone with that. A saved one stays, listed as stopped with
+     * what it counted: it is still in the configuration file, starts again with the next start of msgforge, and can
+     * be started again before that with {@link #restart}.
+     */
     public void stop(String id) {
         Monitor m = find(id, true);
-        synchronized (monitors) {
-            monitors.remove(m);
+        if (!m.saved) {
+            synchronized (monitors) {
+                monitors.remove(m);
+            }
         }
-        if (m.saved) persist();
         end(m);
+    }
+
+    /** Starts a stopped monitor again. One that cannot listen now is listed as down and tries again, like any other. */
+    public View restart(String id) {
+        Monitor m = find(id, true);
+        if (!m.mendable) throw new IllegalArgumentException(m.error);
+        synchronized (m) {
+            if (!m.stopped) return m.view();
+            m.stopped = false;
+            m.attempts = 0;
+            m.state = "starting";
+            m.error = null;
+        }
+        attempt(m);
+        return m.view();
     }
 
     private void persist() {
@@ -322,8 +351,14 @@ public class Monitors {
         TransportType.Subscription s;
         synchronized (m) {
             m.stopped = true;
+            m.breaks++;   // a connect that is on its way finds out it is no longer wanted
             s = m.subscription;
             m.subscription = null;
+            m.retryAt = null;
+            if (m.mendable) {
+                m.state = "stopped";
+                m.error = null;
+            }
         }
         close(s);
     }

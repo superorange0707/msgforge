@@ -71,16 +71,27 @@ final class Faults {
     }
 
     /** Why this kind cannot be applied to a body like this one, or null when it can. Asked before a run starts. */
-    static String refusal(String kind, String template, String body) {
-        if (apply(kind, body, new java.util.SplittableRandom(1)) != null) return null;
+    static String refusal(String kind, String template, String body, String token) {
+        if (apply(kind, body, new java.util.SplittableRandom(1), token) != null) return null;
         boolean structured = looksLikeJson(body) || looksLikeXml(body);
+        if (token != null && apply(kind, body, new java.util.SplittableRandom(1), null) != null) {
+            return template + " has no field besides the one its messages are recognised by (" + token + "), and \"" + kind
+                    + "\" leaves that one alone: without it an invalid message that was accepted could not be told from one that went missing. Leave that kind out, or give the template another field.";
+        }
         return kind.equals("truncated") ? template + " renders to nothing, so there is nothing to cut off. Leave \"truncated\" out."
                 : !structured ? template + " is neither JSON nor XML, so \"" + kind + "\" cannot find a field in it. Leave that kind out, or use it with a JSON or XML template."
                 : template + " does not parse as the " + (looksLikeJson(body) ? "JSON" : "XML") + " it looks like, or has no field to change, so \"" + kind + "\" cannot be applied. Leave that kind out.";
     }
 
-    /** The body with the fault in it, or null when this kind cannot be applied to this text. */
-    static String apply(String kind, String body, RandomGenerator random) {
+    /**
+     * The body with the fault in it, or null when this kind cannot be applied to this text.
+     * token is what the message is recognised by when it arrives, or null when nobody waits for it. A field is not
+     * removed and a value not changed when it holds the token: the system under test may accept the message all the
+     * same, and it then has to be recognised where it arrives to be reported as accepted, not as missing. (An
+     * emptied, garbled or cut-off message loses the token whatever is done; those are recognised by a header or by
+     * their correlation id.)
+     */
+    static String apply(String kind, String body, RandomGenerator random, String token) {
         return switch (kind) {
             case "empty" -> "";
             case "garbage" -> "@@ not a message @@ " + Long.toString(random.nextLong() >>> 1, 36);
@@ -93,7 +104,7 @@ final class Faults {
             case "field-removed", "type-changed" -> {
                 try {
                     boolean remove = kind.equals("field-removed");
-                    yield looksLikeJson(body) ? json(body, remove, random) : looksLikeXml(body) ? xml(body, remove, random) : null;
+                    yield looksLikeJson(body) ? json(body, remove, random, token) : looksLikeXml(body) ? xml(body, remove, random, token) : null;
                 } catch (Exception | StackOverflowError notTheFormat) {
                     yield null;
                 }
@@ -130,10 +141,11 @@ final class Faults {
         }
     }
 
-    private static String json(String body, boolean remove, RandomGenerator random) throws Exception {
+    private static String json(String body, boolean remove, RandomGenerator random, String token) throws Exception {
         JsonNode root = JSON.readTree(body);
         List<Slot> all = new ArrayList<>();
         slots(root, all);
+        if (token != null) all.removeIf(slot -> value(slot).toString().contains(token));   // the value, or anything inside it
         // A field is taken out of an object; a value changes type wherever it is, and one that holds a plain value comes first.
         List<Slot> fields = all.stream().filter(s -> s.field() != null).toList();
         List<Slot> plain = all.stream().filter(s -> value(s).isValueNode() && !value(s).isNull()).toList();
@@ -159,7 +171,7 @@ final class Faults {
 
     // ponytail: the XML is parsed and written again, so its layout (attribute quotes, empty-element form) may differ from
     // the template's in the faulted messages. A DOCTYPE is refused, which is also what keeps entity tricks out.
-    private static synchronized String xml(String body, boolean remove, RandomGenerator random) throws Exception {
+    private static synchronized String xml(String body, boolean remove, RandomGenerator random, String token) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         factory.setXIncludeAware(false);
@@ -170,6 +182,9 @@ final class Faults {
         Element root = doc.getDocumentElement();
         List<Node> elements = new ArrayList<>(), attributes = new ArrayList<>(), leaves = new ArrayList<>();
         collect(root, root, elements, attributes, leaves);
+        if (token != null) {
+            for (List<Node> nodes : List.of(elements, attributes, leaves)) nodes.removeIf(n -> holds(n, token));
+        }
         if (remove) {
             List<Node> from = new ArrayList<>(elements);
             from.addAll(attributes);
@@ -200,6 +215,15 @@ final class Faults {
         StringWriter text = new StringWriter();
         out.transform(new DOMSource(doc), new StreamResult(text));
         return text.toString();
+    }
+
+    /** Whether the token is in this node's text, in what is inside it, or in one of its attributes. */
+    private static boolean holds(Node node, String token) {
+        if (node.getTextContent().contains(token)) return true;
+        NamedNodeMap attrs = node.getAttributes();
+        for (int i = 0; attrs != null && i < attrs.getLength(); i++) if (attrs.item(i).getNodeValue().contains(token)) return true;
+        for (Node child = node.getFirstChild(); child != null; child = child.getNextSibling()) if (child instanceof Element && holds(child, token)) return true;
+        return false;
     }
 
     private static void collect(Element root, Element element, List<Node> elements, List<Node> attributes, List<Node> leaves) {

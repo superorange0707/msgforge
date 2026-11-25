@@ -277,7 +277,13 @@ public class Api {
         return monitors.forget(id);
     }
 
-    /** Stops it, and removes it from the configuration file if it was saved. */
+    /** Starts a saved monitor that was stopped. */
+    @PostMapping("/monitors/{id}/start")
+    public Monitors.View restartMonitor(@PathVariable String id) {
+        return monitors.restart(id);
+    }
+
+    /** Stops it. A saved monitor stays listed, and in the file: it starts again with msgforge, or when asked to. */
     @DeleteMapping("/monitors/{id}")
     public void stopMonitor(@PathVariable String id) {
         monitors.stop(id);

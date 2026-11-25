@@ -410,7 +410,15 @@ final class Cli {
             }
 
             public JsonNode run(String id) throws Exception {
-                return call("GET", "/api/runs/" + id, null).path("run");
+                HttpResponse<String> response = send("GET", "/api/runs/" + id, null);
+                // The run was started a moment ago and a server keeps every run that is going, so "not found" here is
+                // a server from before this call existed.
+                if (response.statusCode() == 404 || response.statusCode() == 405) {
+                    throw new IllegalStateException(url + " started the run but cannot be asked about it: it is a msgforge older than 0.3, and this command line needs 0.3 or newer on the server. "
+                            + "The run goes on there; use the server's own command line, or upgrade it. (On a 0.3 server this can only mean that more than 20 other runs ended in the same moment and pushed this one out of its list.)");
+                }
+                if (response.statusCode() != 200) throw new IllegalStateException(url + " answered " + response.statusCode() + " when asked about run " + id);
+                return json.readTree(response.body()).path("run");
             }
 
             public String report(String id, String format) throws Exception {

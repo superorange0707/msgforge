@@ -89,8 +89,8 @@ public class TemplateEngine {
     }
 
     /**
-     * The same, with every random choice (ids included) drawn from the source given: the same source in the same
-     * state renders the same message again, which is what makes a run with a seed repeatable. Times ({{now}},
+     * The same, with the random choices drawn from the source given: the same source in the same state renders the
+     * same message again, which is what makes a run with a seed repeatable. Ids ({{uuid}}, {{id}}), times ({{now}},
      * {{today}}) and generators from plugins do not come from it and differ from run to run.
      */
     public Message message(Map<String, String> fields, Map<String, String> vars, AtomicLong seq, RandomGenerator random) {
@@ -209,8 +209,8 @@ public class TemplateEngine {
         RandomGenerator r = seeded != null ? seeded : ThreadLocalRandom.current();
         try {
             return switch (name) {
-                case "uuid" -> uuid(seeded).toString();
-                case "id" -> uuid(seeded).toString().replace("-", ""); // 32 characters: fits fields that are limited to 35
+                case "uuid" -> uuid().toString();
+                case "id" -> uuid().toString().replace("-", ""); // 32 characters: fits fields that are limited to 35
                 case "now" -> {
                     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS);
                     if (a.isEmpty()) yield DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(now);
@@ -241,10 +241,13 @@ public class TemplateEngine {
         }
     }
 
-    /** A version 4 UUID: from the system's secure source, or from the seeded one when a run has to be repeatable. */
-    private static UUID uuid(RandomGenerator seeded) {
-        if (seeded == null) return UUID.randomUUID();
-        return new UUID(seeded.nextLong() & 0xFFFFFFFFFFFF0FFFL | 0x4000L, seeded.nextLong() & 0x3FFFFFFFFFFFFFFFL | 0x8000000000000000L);
+    /**
+     * Always from the system's secure source, seed or no seed. An id is what a message is recognised by: one that a
+     * seed repeated would make a message left on a queue by the last run look like an arrival of this one, and one
+     * drawn from a small seed could be guessed.
+     */
+    private static UUID uuid() {
+        return UUID.randomUUID();
     }
 
     private static int upTo(int max, String number, String otherwise) {

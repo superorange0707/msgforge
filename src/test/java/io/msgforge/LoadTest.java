@@ -207,10 +207,12 @@ class LoadTest {
             assertEquals(200, run.sent());
             assertEquals(run.invalid(), run.faults().values().stream().mapToLong(Long::longValue).sum());
             assertTrue(run.invalid() > 30 && run.invalid() < 95, "about 60 of 200: " + run.invalid());
-            bodies.add(sink.bodies());
+            bodies.add(withoutIds(sink.bodies()));
+            assertEquals(200, sink.bodies().stream().map(LoadTest::idOf).filter(id -> id != null).distinct().count()
+                    + sink.bodies().stream().filter(b -> idOf(b) == null).count(), "every id is its own, seed or no seed");
             faults.add(run.faults());
         }
-        assertEquals(bodies.get(0), bodies.get(1), "one sender or four: message n has the same body and the same fault");
+        assertEquals(bodies.get(0), bodies.get(1), "one sender or four: message n has the same body and the same fault, ids apart");
         assertEquals(faults.get(0), faults.get(1));
         assertNotEquals(bodies.get(0), bodies.get(2));
         assertEquals(List.of("empty", "garbage", "truncated", "field-removed", "type-changed"), List.copyOf(faults.get(0).keySet()));
@@ -224,7 +226,22 @@ class LoadTest {
         List<String> original = sink.bodies();
         sink.senders.clear();
         finished(runs, runs.start(to(only(store), ORDER, 20, 0, null, null, first.seed())).id());
-        assertEquals(original, sink.bodies());
+        assertEquals(withoutIds(original), withoutIds(sink.bodies()));
+        // The ids are not repeated: a message the last run left on a queue must not pass for an arrival of this one.
+        assertTrue(java.util.Collections.disjoint(original.stream().map(LoadTest::idOf).toList(), sink.bodies().stream().map(LoadTest::idOf).toList()));
+    }
+
+    private static final java.util.regex.Pattern ID = java.util.regex.Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
+
+    private static String idOf(String body) {
+        java.util.regex.Matcher m = ID.matcher(body);
+        return m.find() ? m.group() : null;
+    }
+
+    /** The bodies with every UUID blanked, in an order that does not depend on them. */
+    private static List<String> withoutIds(List<String> bodies) {
+        // a body cut off inside its id ends in a piece of one
+        return bodies.stream().map(b -> ID.matcher(b).replaceAll("<id>").replaceAll("\"id\":\"[0-9a-f-]*$", "\"id\":\"<cut>")).sorted().toList();
     }
 
     // ---- invalid messages
@@ -234,40 +251,58 @@ class LoadTest {
         String order = "{\n  \"id\": \"a1\",\n  \"items\": 3,\n  \"total\": 10.50,\n  \"lines\": [{\"sku\": \"X\", \"qty\": 2}]\n}";
         String shipment = "<?xml version=\"1.0\"?><Shipment id=\"s1\"><Carrier>Blue Harbor</Carrier><Weight unit=\"kg\">12.5</Weight></Shipment>";
         SplittableRandom random = new SplittableRandom(7);
-        assertEquals("", Faults.apply("empty", order, random));
-        assertFalse(Faults.apply("garbage", order, random).contains("{"));
+        assertEquals("", Faults.apply("empty", order, random, null));
+        assertFalse(Faults.apply("garbage", order, random, null).contains("{"));
         for (int i = 0; i < 50; i++) {
-            String cut = Faults.apply("truncated", order, random);
+            String cut = Faults.apply("truncated", order, random, null);
             assertTrue(!cut.isEmpty() && cut.length() < order.length() && order.startsWith(cut));
 
-            JsonNode before = json.readTree(order), removed = json.readTree(Faults.apply("field-removed", order, random));
+            JsonNode before = json.readTree(order), removed = json.readTree(Faults.apply("field-removed", order, random, null));
             assertTrue(count(removed) < count(before) && count(removed) >= count(before) - 4, "one field fewer, with whatever was inside it: " + removed);
-            String changed = Faults.apply("type-changed", order, random);
+            String changed = Faults.apply("type-changed", order, random, null);
             JsonNode after = json.readTree(changed);
             assertEquals(count(before), count(after), "the same fields");
             assertNotEquals(types(before), types(after), "and one of another type: " + changed);
             assertTrue(changed.contains("10.50") || !after.path("total").isNumber(), "numbers that were not touched stay as written: " + changed);
 
             var builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
-            String without = Faults.apply("field-removed", shipment, random);
+            String without = Faults.apply("field-removed", shipment, random, null);
             builder.parse(new InputSource(new StringReader(without)));   // still XML
             assertTrue(without.startsWith("<?xml") && without.length() < shipment.length() + 40 && !without.equals(shipment), without);
             assertTrue(List.of("id=\"s1\"", "<Carrier>", "<Weight", "unit=\"kg\"").stream().filter(without::contains).count() < 4, without);
-            String retyped = Faults.apply("type-changed", shipment, random);
+            String retyped = Faults.apply("type-changed", shipment, random, null);
             builder.parse(new InputSource(new StringReader(retyped)));
             assertTrue(retyped.contains("<Weight unit=\"kg\">not-a-number</Weight>"), "the one value that reads as a number: " + retyped);
         }
         // XML with nothing that reads as a number: a simple element becomes one with a child
-        assertEquals("<a><b><value>text</value></b></a>", Faults.apply("type-changed", "<a><b>text</b></a>", random));
+        assertEquals("<a><b><value>text</value></b></a>", Faults.apply("type-changed", "<a><b>text</b></a>", random, null));
         // a DOCTYPE is not parsed, so no entity is ever resolved
-        assertNull(Faults.apply("field-removed", "<!DOCTYPE a [<!ENTITY x SYSTEM \"file:///etc/hosts\">]><a><b>&x;</b></a>", random));
+        assertNull(Faults.apply("field-removed", "<!DOCTYPE a [<!ENTITY x SYSTEM \"file:///etc/hosts\">]><a><b>&x;</b></a>", random, null));
+
+        // The field a message is recognised by is left alone: accepted all the same, the message has to be recognisable where it arrives.
+        String keyed = "{\"orderId\":\"k-1234567\",\"items\":3,\"lines\":[{\"ref\":\"x\"}]}", keyedXml = "<Order id=\"k-1234567\"><Ref>k-1234567</Ref><Qty>2</Qty></Order>";
+        for (int i = 0; i < 200; i++) {
+            for (String kind : List.of("field-removed", "type-changed")) {
+                assertTrue(Faults.apply(kind, keyed, random, "k-1234567").contains("\"orderId\":\"k-1234567\""), kind);
+                String xml = Faults.apply(kind, keyedXml, random, "k-1234567");
+                assertTrue(xml.contains("id=\"k-1234567\"") && xml.contains("<Ref>k-1234567</Ref>") && !xml.equals(keyedXml), kind + ": " + xml);
+            }
+        }
+        assertFalse(java.util.stream.IntStream.range(0, 50).allMatch(i -> Faults.apply("field-removed", keyed, random, null).contains("orderId")), "without a token any field may go");
+        // a parent of the token's field is not removed either, and with no other field left the kind is refused before the run
+        assertEquals("{\"a\":{\"id\":\"k-1234567\"}}", Faults.apply("field-removed", "{\"a\":{\"id\":\"k-1234567\"},\"b\":1}", random, "k-1234567"));
+        assertNull(Faults.apply("field-removed", "{\"a\":{\"id\":\"k-1234567\"}}", random, "k-1234567"));
+        assertNull(Faults.apply("type-changed", "<a><id>k-1234567</id></a>", random, "k-1234567"));
+        assertTrue(Faults.refusal("field-removed", "id-only.json", "{\"id\":\"k-1234567\"}", "k-1234567").startsWith(
+                "id-only.json has no field besides the one its messages are recognised by (k-1234567), and \"field-removed\" leaves that one alone"));
+        assertNull(Faults.refusal("field-removed", "id-only.json", "{\"id\":\"k-1234567\"}", null));
 
         // text that is neither is refused before a run starts, by name
-        assertNull(Faults.apply("field-removed", "site,12.5,ok", random));
+        assertNull(Faults.apply("field-removed", "site,12.5,ok", random, null));
         assertEquals("reading.csv is neither JSON nor XML, so \"type-changed\" cannot find a field in it. Leave that kind out, or use it with a JSON or XML template.",
-                Faults.refusal("type-changed", "reading.csv", "site,12.5,ok"));
-        assertNull(Faults.refusal("truncated", "reading.csv", "site,12.5,ok"));
-        assertTrue(Faults.refusal("field-removed", "broken.json", "{\"a\":").contains("does not parse as the JSON it looks like"));
+                Faults.refusal("type-changed", "reading.csv", "site,12.5,ok", null));
+        assertNull(Faults.refusal("truncated", "reading.csv", "site,12.5,ok", null));
+        assertTrue(Faults.refusal("field-removed", "broken.json", "{\"a\":", null).contains("does not parse as the JSON it looks like"));
         assertEquals("Unknown kind of invalid message: scrambled. The kinds are empty, garbage, truncated, field-removed, type-changed",
                 assertThrows(IllegalArgumentException.class, () -> Faults.kinds(new Faults.Spec(5, List.of("scrambled"), null))).getMessage());
         assertThrows(IllegalArgumentException.class, () -> Faults.kinds(new Faults.Spec(101, null, null)));
@@ -489,6 +524,18 @@ class LoadTest {
         Runs.View lenient = finished(runs, runs.start(ordersRun(60, new Faults.Spec(30, List.of("field-removed"), REJECTED), 1, null)).id());
         assertEquals("FAIL", lenient.verdict());
         assertEquals(lenient.checks().get(1).sent(), lenient.checks().get(1).accepted());
+        // Also when the body's own id is all there is to recognise it by (no header carries the token here): the
+        // fault never takes that field, so none of the accepted ones is counted as missing.
+        Runs.View byBody = finished(runs, runs.start(new Runs.Request("by body", List.of(new Runs.Part("demo", "order.json", null, 1, null, OUT)), List.of(IN), null, 300, 0,
+                null, null, null, null, null, null, null, null, 1, null, null, new Faults.Spec(40, List.of("field-removed", "type-changed"), REJECTED), 21L, null, null)).id());
+        Runs.Check accepted = byBody.checks().get(1);
+        assertTrue(accepted.sent() > 80, byBody.checks().toString());
+        assertEquals(accepted.sent(), accepted.accepted(), byBody.checks().toString());
+        assertEquals(0, accepted.missing());
+        // a template with nothing but that id cannot be given such a fault, and the run says so before it starts
+        Runs.Request idOnly = new Runs.Request(null, null, null, null, 5, 0, null, "demo", "order.json", "{\"id\":\"{{uuid}}\"}", null, "dry-run", "ORDERS.IN", OUT, 1, null,
+                null, new Faults.Spec(50, List.of("field-removed"), REJECTED), null, null, null);
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> runs.start(idOnly)).getMessage().contains("has no field besides the one its messages are recognised by"));
 
         assertNull(DryRunType.flaw("<a><b/></a>"));
         assertNull(DryRunType.flaw(" [1, 2] "));
@@ -620,7 +667,7 @@ class LoadTest {
         String why = assertThrows(IllegalArgumentException.class, () -> runs.start(loop.apply(5))).getMessage();
         assertTrue(why.startsWith("The run waits is waiting for arrivals on Queue / REJECTS. Two runs that expect arrivals on one destination"), why);
         // one that only watches it is not: it joins, and so does a new monitor
-        Runs.View watching = finished(runs, runs.start(new Runs.Request("watches", null, null, null, 3, 0, null, "demo", "order.json", null, null, id, "REJECTS", null, null, null,
+        Runs.View watching = finished(runs, runs.start(new Runs.Request("watches", null, null, null, 3, 0, null, "demo", "order.json", null, null, id, "REJECTS", null, 1, null,
                 null, null, null, List.of(new Runs.Watch(id, "REJECTS", null)), null)).id());
         assertEquals(3, watching.watched().get(0).count());
         Monitors.View again = monitors.start(new Monitors.Request(id, "REJECTS", null));
@@ -658,6 +705,48 @@ class LoadTest {
         assertEquals("At most 10 monitors. Stop one first.", assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("dry-run", "ONE.MORE", null))).getMessage());
         more.stopAll();
         assertTrue(more.list().isEmpty());
+    }
+
+    @Test
+    void aRunThatOnlyWatchesWaitsItsTimeoutForWhatIsStillOnItsWay(@TempDir Path dir) throws Exception {
+        DryRunType dry = new DryRunType();
+        Connections store = store(dir, dry);
+        Runs runs = new Runs(packs, engine, store);
+        Monitors monitors = new Monitors(store);
+        // A system that rejects late: half a second after each message it puts a reject on ORDERS.REJECTED.
+        java.util.concurrent.ScheduledExecutorService late = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        TransportType.Sender out = dry.open(Map.of());
+        try (TransportType.Subscription sut = dry.subscribe(Map.of(), "ORDERS.IN", body -> late.schedule(() -> {
+            out.send("ORDERS.REJECTED", "{\"reason\":\"late\"}", Map.of());
+            return null;
+        }, 500, java.util.concurrent.TimeUnit.MILLISECONDS), e -> { })) {
+            Function<Integer, Runs.Request> watchOnly = timeout -> new Runs.Request("watch only", null, null, null, 20, 0, null, "demo", "order.json", null, null, "dry-run", "ORDERS.IN",
+                    null, timeout, null, null, null, null, List.of(new Runs.Watch("dry-run", "ORDERS.REJECTED", List.of(new Observer.Bucket(null, "/reason", null, null)))), null);
+            long began = System.nanoTime();
+            String id = runs.start(watchOnly.apply(2)).id();
+            for (int i = 0; i < 100 && runs.list().get(0).status() == Runs.Status.RUNNING; i++) Thread.sleep(10);
+            assertEquals(Runs.Status.VERIFYING, runs.list().get(0).status(), "sending is over, and it goes on listening");
+            Runs.View run = finished(runs, id);
+            assertTrue(System.nanoTime() - began >= 2_000_000_000L, "the whole timeout: nobody can say when the last reject has come");
+            assertEquals(Runs.Status.DONE, run.status());
+            assertNull(run.verdict(), "it expected nothing, so there is nothing to judge");
+            assertEquals(20, run.watched().get(0).count(), "all twenty rejects, though the last was sent before any had arrived");
+            assertEquals(List.of(new Observer.Count("late", 20)), runs.detail(id, false).watches().get(0).tables().get(0).values());
+
+            // with a monitor on the same destination the subscription stays open anyway; the run still waits, so its own table is complete
+            Monitors.View monitor = monitors.start(new Monitors.Request("dry-run", "ORDERS.REJECTED", null));
+            Runs.View shared = finished(runs, runs.start(watchOnly.apply(2)).id());
+            assertEquals(20, shared.watched().get(0).count());
+            assertEquals(20, monitors.list().get(0).watch().count());
+            monitors.stop(monitor.id());
+            // cancelling ends the wait at once
+            String cancelled = runs.start(watchOnly.apply(60)).id();
+            for (int i = 0; i < 100 && runs.list().get(0).status() == Runs.Status.RUNNING; i++) Thread.sleep(10);
+            runs.cancel(cancelled);
+            assertEquals(Runs.Status.CANCELLED, finished(runs, cancelled).status());
+        } finally {
+            late.shutdownNow();
+        }
     }
 
     private static Monitors.View monitor(Monitors monitors, String id, String state) throws InterruptedException {
@@ -765,11 +854,33 @@ class LoadTest {
         assertFalse(monitors.forget(byHand.id()).saved());
         assertEquals(6, json.readTree(file.toFile()).get("monitors").size());
         assertEquals(7, monitors.list().size(), "forgotten, it goes on watching");
-        monitors.save(byHand.id());
+        // Stopping a monitor that is not saved removes it. A saved one only stops: it stays in the file and in the list,
+        // keeps what it counted, hears nothing more, and can be started again.
         monitors.stop(byHand.id());
+        assertEquals(6, monitors.list().size());
+        dry.open(Map.of()).send("REJECTS." + System.getenv("HOME"), "{\"reason\":\"empty\"}", Map.of());
+        long counted = monitor(monitors, "rejects", "up").watch().count();
+        monitors.stop("rejects");
+        Monitors.View stopped = monitor(monitors, "rejects", "stopped");
+        assertTrue(stopped.saved() && stopped.error() == null && stopped.retryAt() == null);
+        assertEquals(6, json.readTree(file.toFile()).get("monitors").size(), "still saved");
+        dry.open(Map.of()).send("REJECTS." + System.getenv("HOME"), "{\"reason\":\"unheard\"}", Map.of());
+        assertEquals(counted, monitors.list().get(0).watch().count());
+        assertEquals("up", monitors.restart("rejects").state());
+        dry.open(Map.of()).send("REJECTS." + System.getenv("HOME"), "{\"reason\":\"heard\"}", Map.of());
+        assertEquals(counted + 1, monitors.list().get(0).watch().count());
+        assertEquals("up", monitors.restart("rejects").state(), "starting one that is up changes nothing");
+        // one that is down is stopped the same way, and then no longer tries
+        monitors.stop("secret");
+        assertEquals("stopped", monitor(monitors, "secret", "stopped").state());
+        assertEquals("down", monitors.restart("secret").state());
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> monitors.restart("typo")).getMessage().contains("is not a regular expression"));
+        // out of the file is the other step: forgetting a stopped one removes it altogether
         monitors.stop("typo");
+        assertEquals(6, monitors.list().size());
+        assertFalse(monitors.forget("typo").saved());
         assertEquals(List.of("rejects", "remote", gone.id(), "blank", "secret"), monitors.list().stream().map(Monitors.View::id).toList());
-        assertEquals(5, json.readTree(file.toFile()).get("monitors").size(), "stopping a saved monitor takes it out of the file");
+        assertEquals(5, json.readTree(file.toFile()).get("monitors").size());
         // saved at once when asked to be
         Monitors.View kept = monitors.start(new Monitors.Request(null, "dry-run", "KEPT", null, true));
         assertTrue(kept.saved() && Files.readString(file).contains("\"KEPT\""));
@@ -1010,7 +1121,7 @@ class LoadTest {
         // two more runs: the folder keeps two, the oldest goes, and files msgforge did not write stay
         String second = finished(runs, runs.start(to(only(store), "m", 3, 0, null, null, null)).id()).id();
         String third = finished(runs, runs.start(to(only(store), "m", 3, 0, null, null, null)).id()).id();
-        for (int i = 0; i < 100 && !reports.saved().reports().get(0).id().equals(third); i++) Thread.sleep(20);
+        // no waiting: a run is not shown as ended before its reports are in the folder
         assertEquals(List.of(third, second), reports.saved().reports().stream().map(Reports.Report::id).toList());
         try (var files = Files.list(folder)) {
             assertEquals(10, files.count(), "two runs in four formats, and the two files that were there");
@@ -1042,6 +1153,14 @@ class LoadTest {
             assertTrue(line.startsWith("# ") || line.matches("[a-z_]+(\\{[^\\n]*})? -?[0-9.]+"), "every line is a comment or a sample: " + line);
         }
         assertEquals("a\\\\b\\\"c\\nd", Metrics.label("a\\b\"c\nd\u0007"));
+        // two connections with one name are one series, added up: two samples with the same labels would make the whole answer invalid
+        store.save(new Connections.Connection(null, "Dry run", "dry-run", Map.of(), List.of()));
+        String twin = store.list().stream().filter(c -> c.name().equals("Dry run") && !c.id().equals("dry-run")).findFirst().orElseThrow().id();
+        finished(runs, runs.start(new Runs.Request(null, null, null, null, 2, 0, null, "demo", "order.json", null, null, twin, "ORDERS.REJECTED", null, 1, null,
+                null, null, null, List.of(new Runs.Watch(twin, "ORDERS.REJECTED", null)), null)).id());
+        List<String> samples = java.util.Arrays.stream(new Metrics(runs, monitors).metrics().split("\n")).filter(l -> !l.startsWith("#")).map(l -> l.substring(0, l.lastIndexOf(' '))).toList();
+        assertEquals(samples.size(), samples.stream().distinct().count(), "no series twice: " + samples);
+        assertTrue(new Metrics(runs, monitors).metrics().contains("destination=\"ORDERS.REJECTED\",source=\"run\"} " + (run.invalid() + 2) + "\n"));
         assertEquals(200, Metrics.label("\\".repeat(500)).length() / 2);
         monitors.stopAll();
     }

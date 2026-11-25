@@ -1,6 +1,8 @@
 package io.msgforge;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -49,14 +51,17 @@ public class Metrics {
         gauge(out, "msgforge_senders", "Sender threads of the active runs.", active.stream().mapToInt(Runs.View::senders).sum());
 
         head(out, "msgforge_arrivals_total", "Messages that arrived on a destination a run watched (source run, since start) or a monitor is on (source monitor, since its reset).", "counter");
-        totals.arrivals.forEach((where, n) -> arrivals(out, where.connection(), where.destination(), "run", n.sum()));
-        for (Monitors.View m : monitors.list()) arrivals(out, m.watch().connection(), m.watch().destination(), "monitor", m.watch().count());
+        // Two connections may share a name, and two samples with the same labels make the whole answer invalid: they are added up.
+        // The label is the name, not the id: the name is what a dashboard is read by, and the id is eight random characters.
+        Map<String, Long> series = new LinkedHashMap<>();
+        totals.arrivals.forEach((where, n) -> series.merge(labels(where.connection(), where.destination(), "run"), n.sum(), Long::sum));
+        for (Monitors.View m : monitors.list()) series.merge(labels(m.watch().connection(), m.watch().destination(), "monitor"), m.watch().count(), Long::sum);
+        series.forEach((labels, n) -> out.append("msgforge_arrivals_total").append(labels).append(' ').append(n).append('\n'));
         return out.toString();
     }
 
-    private static void arrivals(StringBuilder out, String connection, String destination, String source, long n) {
-        out.append("msgforge_arrivals_total{connection=\"").append(label(connection)).append("\",destination=\"").append(label(destination))
-                .append("\",source=\"").append(source).append("\"} ").append(n).append('\n');
+    private static String labels(String connection, String destination, String source) {
+        return "{connection=\"" + label(connection) + "\",destination=\"" + label(destination) + "\",source=\"" + source + "\"}";
     }
 
     private static void head(StringBuilder out, String name, String help, String type) {

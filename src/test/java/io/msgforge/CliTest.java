@@ -155,6 +155,29 @@ class CliTest {
     }
 
     @Test
+    void aServerFromBeforeLoadRunsIsNamedAsTooOld() throws Exception {
+        // It has the scenario and starts the run, as 0.2 did, and does not know the call a run is followed by since 0.3.
+        com.sun.net.httpserver.HttpServer old = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        old.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            byte[] answer = (path.equals("/api/scenarios") ? "[{\"id\":\"s1\",\"name\":\"Loop\",\"count\":1}]"
+                    : path.equals("/api/runs") ? "{\"id\":\"abcd1234\",\"count\":1,\"status\":\"RUNNING\"}" : "{\"error\":\"Not Found\"}").getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(path.startsWith("/api/runs/") ? 404 : 200, answer.length);
+            exchange.getResponseBody().write(answer);
+            exchange.close();
+        });
+        old.start();
+        try {
+            Result r = cli("run", "Loop", "--url", "http://127.0.0.1:" + old.getAddress().getPort());
+            assertEquals(2, r.code(), r.out());
+            assertTrue(r.out().contains("it is a msgforge older than 0.3, and this command line needs 0.3 or newer on the server"), r.out());
+        } finally {
+            old.stop(0);
+        }
+    }
+
+    @Test
     void settingsMayComeBeforeTheCommand() {
         assertTrue(Cli.handles(new String[] {"--msgforge.config=x.json", "run", "Loop"}));
         assertTrue(Cli.handles(new String[] {"--msgforge.config=x.json", "list"}));

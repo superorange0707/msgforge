@@ -438,7 +438,7 @@ class ApiTest {
     void aLoadRunHasItsStatisticsItsDetailAndItsReports() throws Exception {
         // dry run hands a message to whoever listens on its destination, so watching the destination sent to sees every message
         String id = sent(post("/api/runs"), """
-                {"label":"Nightly <soak>","pack":"demo","template":"order.json","connection":"dry-run","destination":"LOAD.IN","count":60,"rate":0,
+                {"label":"Nightly <soak>","pack":"demo","template":"order.json","connection":"dry-run","destination":"LOAD.IN","count":60,"rate":0,"timeoutSeconds":1,
                  "load":{"senders":2},"invalid":{"percent":50,"kinds":["empty","field-removed"]},"seed":7,
                  "watches":[{"connection":"dry-run","destination":"LOAD.IN","buckets":[{"pointer":"/currency"},{"name":"has id","regex":"orderId"}]}]}""").get("id").asText();
         JsonNode run = lastRun();
@@ -550,7 +550,7 @@ class ApiTest {
     void aScenarioKeepsItsLoadPlanAndADestinationMayNameTheEnvironment() throws Exception {
         String scenario = """
                 {"name":"Soak","parts":[{"pack":"demo","template":"order.json","weight":1}],"targets":[{"connection":"dry-run","destination":"S.${HOME}"}],
-                 "count":0,"rate":400,"load":{"rampUpSeconds":1,"durationSeconds":1,"senders":2},"invalid":{"percent":10,"kinds":["truncated"]},"seed":99,
+                 "count":0,"rate":400,"timeoutSeconds":1,"load":{"rampUpSeconds":1,"durationSeconds":1,"senders":2},"invalid":{"percent":10,"kinds":["truncated"]},"seed":99,
                  "watches":[{"connection":"dry-run","destination":"S.${HOME}","buckets":[{"header":"origin"}]}]}""";
         JsonNode saved = sent(post("/api/scenarios"), scenario);
         String id = saved.get("id").asText();
@@ -649,10 +649,18 @@ class ApiTest {
         assertFalse(Files.readString(dir.resolve("msgforge.json")).contains("Late ones"));
         mvc.perform(put("/api/monitors/" + id + "/saved")).andExpect(status().isOk());
         mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isOk()).andExpect(jsonPath("$.watch.count").value(0));
+        // stopping a saved monitor only stops it: it stays listed and in the file, and can be started again
         mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isOk());
+        assertEquals("stopped", monitor(id).get("state").asText());
+        assertTrue(Files.readString(dir.resolve("msgforge.json")).contains("Late ones"));
+        mvc.perform(post("/api/monitors/" + id + "/start")).andExpect(status().isOk()).andExpect(jsonPath("$.state").value("up"));
+        mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isOk());
+        // taking it out of the file is the other step, and removes a stopped one from the list
+        mvc.perform(delete("/api/monitors/" + id + "/saved")).andExpect(status().isOk());
         assertFalse(Files.readString(dir.resolve("msgforge.json")).contains("Late ones"));
         assertTrue(Files.readString(dir.resolve("msgforge.json")).contains("ALWAYS.REJECTED"), "the others stay");
         mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isNotFound());
+        mvc.perform(post("/api/monitors/" + id + "/start")).andExpect(status().isNotFound());
         mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isNotFound());
         mvc.perform(put("/api/monitors/" + id + "/saved")).andExpect(status().isNotFound());
         assertEquals(null, monitor(id));
@@ -660,6 +668,8 @@ class ApiTest {
         String kept = sent(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"KEPT.Q\",\"save\":true}").get("id").asText();
         assertTrue(Files.readString(dir.resolve("msgforge.json")).contains("KEPT.Q"));
         mvc.perform(delete("/api/monitors/" + kept)).andExpect(status().isOk());
+        mvc.perform(delete("/api/monitors/" + kept + "/saved")).andExpect(status().isOk());
+        assertFalse(Files.readString(dir.resolve("msgforge.json")).contains("KEPT.Q"));
 
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"gone\",\"destination\":\"Q\"}")).andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Old broker is a rabbit (not installed) connection, which cannot receive."));
@@ -674,7 +684,7 @@ class ApiTest {
 
     @Test
     void metricsAreNumbersAndNamesAndFollowTheSameHostRules() throws Exception {
-        sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"M.${HOME}\",\"count\":4,"
+        sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"M.${HOME}\",\"count\":4,\"timeoutSeconds\":1,"
                 + "\"watches\":[{\"connection\":\"dry-run\",\"destination\":\"M.${HOME}\"}]}");
         lastRun();
         String metrics = mvc.perform(get("/metrics")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "text/plain;version=0.0.4;charset=UTF-8"))

@@ -376,7 +376,7 @@ public class Reports {
         b.append("<div class=\"tiles\">").append(tile("sent", String.format(Locale.ROOT, "%,d", r.sent()), ""))
                 .append(tile("failed", String.format(Locale.ROOT, "%,d", r.failed()), r.failed() > 0 ? "bad" : ""));
         if (!r.faults().isEmpty()) b.append(tile("invalid on purpose", String.format(Locale.ROOT, "%,d", r.invalid()), ""));
-        b.append(tile(r.rate() == null ? "a second" : "a second, of " + num(r.rate()), num(r.actualRate()), "")).append(tile("sending", span(r.elapsedMs()), ""));
+        b.append(tile(r.rate() == null ? "rate" : "rate · target " + num(r.rate()) + "/s", num(r.actualRate()) + "/s", "")).append(tile("sending", span(r.elapsedMs()), ""));
         if (r.latency() != null) {
             b.append(tile("send p50", num(r.latency().p50()) + " ms", "")).append(tile("send p95", num(r.latency().p95()) + " ms", "")).append(tile("send p99", num(r.latency().p99()) + " ms", ""));
         }

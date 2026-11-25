@@ -245,6 +245,7 @@ public class Runs {
         final List<Observer> observers;         // one per watch
         final List<String> watchKeys = new ArrayList<>();   // connection and resolved destination, one per watch
         final java.util.Set<String> expecting = new java.util.HashSet<>();   // the keys of the watches this run expects arrivals on
+        final boolean onlyWatched;              // it listens somewhere it expects nothing in particular: it waits its whole timeout there
         final int invalidWatch;                 // where invalid messages should arrive, -1 for nowhere
         final boolean verifying;
         final double faultPercent;
@@ -320,6 +321,7 @@ public class Runs {
             for (int i = 0; i < watches.size(); i++) watchKeys.add(watches.get(i).connectionId() + "\n" + watchDestinations.get(i));
             for (Loaded part : parts) if (part.watch() >= 0) expecting.add(watchKeys.get(part.watch()));
             if (invalidWatch >= 0) expecting.add(watchKeys.get(invalidWatch));
+            onlyWatched = watchKeys.stream().anyMatch(key -> !expecting.contains(key));
         }
 
         long elapsed() {
@@ -379,10 +381,10 @@ public class Runs {
             String body = message.body(), fault = null;
             if (faultKinds != null && random.nextDouble() * 100 < faultPercent) {
                 fault = faultKinds.get(random.nextInt(faultKinds.size()));
-                String faulted = Faults.apply(fault, body, random);
+                String faulted = Faults.apply(fault, body, random, message.token());
                 if (faulted == null) {   // checked before the run, so only a message unlike the first: cut it off instead
                     fault = body.length() < 2 ? "empty" : "truncated";
-                    faulted = Faults.apply(fault, body, random);
+                    faulted = Faults.apply(fault, body, random, null);
                 }
                 body = faulted;
                 faults.computeIfAbsent(fault, k -> new AtomicLong()).incrementAndGet();
@@ -527,7 +529,11 @@ public class Runs {
         }
 
         View view() {
-            Status status = this.status;   // read first: once it says the run has ended, the checks no longer change
+            return view(this.status, this.finishedAt);   // status read first: once it says the run has ended, the checks no longer change
+        }
+
+        /** The view as it is, or as it will be once the run is marked ended with this status at this time. */
+        View view(Status status, Instant finishedAt) {
             // A run that failed or was cancelled did not finish the experiment: it has a status, and no result to judge.
             List<Check> checks = status == Status.FAILED || status == Status.CANCELLED ? List.of() : checks();
             long sent = stats.sent(), failed = stats.failed(), elapsed = elapsed(), now = System.nanoTime();
@@ -549,6 +555,10 @@ public class Runs {
 
         Detail detail(boolean withSamples) {
             return new Detail(view(), stats.series(elapsed(), plan), observers.stream().map(o -> o.view(withSamples)).toList());
+        }
+
+        Detail ending(Status status, Instant finishedAt) {
+            return new Detail(view(status, finishedAt), stats.series(elapsed(), plan), observers.stream().map(o -> o.view(false)).toList());
         }
     }
 
@@ -707,7 +717,7 @@ public class Runs {
             // and on a kind of fault this template cannot be given
             if (faultKinds != null) {
                 for (String kind : faultKinds) {
-                    String why = Faults.refusal(kind, name, first.body());
+                    String why = Faults.refusal(kind, name, first.body(), first.token());
                     if (why != null) throw new IllegalArgumentException(why);
                 }
             }
@@ -919,13 +929,15 @@ public class Runs {
             if (run.failure != null) throw new IllegalStateException(run.failure);
             // Nothing went out at all: there is no result, only the reason.
             if (!run.stopped() && run.stats.sent() == 0 && run.stats.failed() > 0) throw new IllegalStateException(run.stats.lastError());
-            if (!run.watches.isEmpty() && run.verifying && !run.stopped()) {
+            if (!run.watches.isEmpty() && !run.stopped()) {
                 run.status = Status.VERIFYING;
                 long deadline = System.nanoTime() + run.timeoutSeconds * 1_000_000_000L;
                 synchronized (run.awaited) {
                     // The last arrival, cancel() and a failing receiver all notify. Messages expected nowhere are given
-                    // the whole timeout to turn up somewhere after all: their absence is the result.
-                    for (long left; (run.outstanding > 0 || run.nowhere > 0) && !run.stopped() && (left = deadline - System.nanoTime()) > 0;) {
+                    // the whole timeout to turn up somewhere after all: their absence is the result. So is a destination
+                    // that is only watched: nobody can say when the last reject has come, and a receiver closed while
+                    // messages are still on their way misses them, or on a queue takes them and drops them.
+                    for (long left; (run.outstanding > 0 || run.nowhere > 0 || run.onlyWatched) && !run.stopped() && (left = deadline - System.nanoTime()) > 0;) {
                         run.awaited.wait(left / 1_000_000 + 1);
                     }
                     waiting = run.outstanding > 0;
@@ -972,12 +984,11 @@ public class Runs {
                     // the run's result stands; the rest must still be closed
                 }
             }
-            run.finishedAt = Instant.now();
-            run.status = end;
-            View view = run.view();
-            totals.runs.computeIfAbsent(view.verdict() != null ? view.verdict().toLowerCase() : end.name().toLowerCase(), k -> new LongAdder()).increment();
-            if (!finishedListeners.isEmpty()) {
-                Detail detail = run.detail(false);
+            // The reports are written before the run is marked ended: whoever sees it ended can rely on them being there.
+            Instant at = Instant.now();
+            Detail detail = null;
+            try {
+                detail = run.ending(end, at);
                 for (Consumer<Detail> listener : finishedListeners) {
                     try {
                         listener.accept(detail);
@@ -985,7 +996,13 @@ public class Runs {
                         // a report that could not be written does not change how the run ended
                     }
                 }
+            } catch (Throwable ignored) {
+                // nor does one that could not be put together
             }
+            String outcome = detail != null && detail.run().verdict() != null ? detail.run().verdict().toLowerCase() : end.name().toLowerCase();
+            totals.runs.computeIfAbsent(outcome, k -> new LongAdder()).increment();
+            run.finishedAt = at;
+            run.status = end;
         }
     }
 
