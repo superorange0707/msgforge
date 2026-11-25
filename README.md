@@ -8,6 +8,15 @@ It ships with IBM MQ and HTTP connection types, a dry-run type that needs no bro
 
 ## Run it
 
+With Homebrew (macOS or Linux), built from source on your machine with OpenJDK 17:
+
+```bash
+brew install superorange0707/tap/msgforge
+msgforge                          # or: brew services start msgforge
+```
+
+Connections, scenarios and packs are then kept in `$(brew --prefix)/var/msgforge`, so upgrades keep them.
+
 From a release: unzip `msgforge-<version>.zip` and start it. The zip holds the application, the bundled packs and the plugins.
 
 ```bash
