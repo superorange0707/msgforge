@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.random.RandomGenerator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -84,7 +85,16 @@ public class TemplateEngine {
      * check passes a new one and uses nothing up.
      */
     public Message message(Map<String, String> fields, Map<String, String> vars, AtomicLong seq) {
-        return new Rendering(fields, new HashMap<>(vars), seq);
+        return message(fields, vars, seq, null);
+    }
+
+    /**
+     * The same, with every random choice (ids included) drawn from the source given: the same source in the same
+     * state renders the same message again, which is what makes a run with a seed repeatable. Times ({{now}},
+     * {{today}}) and generators from plugins do not come from it and differ from run to run.
+     */
+    public Message message(Map<String, String> fields, Map<String, String> vars, AtomicLong seq, RandomGenerator random) {
+        return new Rendering(fields, new HashMap<>(vars), seq, random);
     }
 
     public interface Message {
@@ -97,12 +107,14 @@ public class TemplateEngine {
     private final class Rendering implements Message {
         private final Map<String, String> fields, bound;
         private final AtomicLong seq;
+        private final RandomGenerator random;   // null: the thread's own, and ids from the system
         private String firstId;
 
-        Rendering(Map<String, String> fields, Map<String, String> bound, AtomicLong seq) {
+        Rendering(Map<String, String> fields, Map<String, String> bound, AtomicLong seq, RandomGenerator random) {
             this.fields = fields;
             this.bound = bound;
             this.seq = seq;
+            this.random = random;
         }
 
         @Override
@@ -130,7 +142,7 @@ public class TemplateEngine {
                 else if (bound.containsKey(name)) value = bound.get(name);
                 else if (fields.containsKey(name)) value = render(fields.get(name), depth + 1);
                 else {
-                    value = builtin(name, args(m.group(3)), seq);
+                    value = builtin(name, args(m.group(3)), seq, random);
                     if (firstId == null && (name.equals("uuid") || name.equals("id"))) firstId = value;
                 }
                 if (bind != null) bound.put(bind, value);
@@ -185,7 +197,7 @@ public class TemplateEngine {
         return out;
     }
 
-    private String builtin(String name, List<String> a, AtomicLong seq) {
+    private String builtin(String name, List<String> a, AtomicLong seq, RandomGenerator seeded) {
         Generator plugin = custom.get(name);
         if (plugin != null) {
             try {
@@ -194,11 +206,11 @@ public class TemplateEngine {
                 throw new IllegalArgumentException("{{" + name + "}}: " + e.getMessage());
             }
         }
-        ThreadLocalRandom r = ThreadLocalRandom.current();
+        RandomGenerator r = seeded != null ? seeded : ThreadLocalRandom.current();
         try {
             return switch (name) {
-                case "uuid" -> UUID.randomUUID().toString();
-                case "id" -> UUID.randomUUID().toString().replace("-", ""); // 32 characters: fits fields that are limited to 35
+                case "uuid" -> uuid(seeded).toString();
+                case "id" -> uuid(seeded).toString().replace("-", ""); // 32 characters: fits fields that are limited to 35
                 case "now" -> {
                     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS);
                     if (a.isEmpty()) yield DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(now);
@@ -229,6 +241,12 @@ public class TemplateEngine {
         }
     }
 
+    /** A version 4 UUID: from the system's secure source, or from the seeded one when a run has to be repeatable. */
+    private static UUID uuid(RandomGenerator seeded) {
+        if (seeded == null) return UUID.randomUUID();
+        return new UUID(seeded.nextLong() & 0xFFFFFFFFFFFF0FFFL | 0x4000L, seeded.nextLong() & 0x3FFFFFFFFFFFFFFFL | 0x8000000000000000L);
+    }
+
     private static int upTo(int max, String number, String otherwise) {
         int n = Integer.parseInt(number);
         if (n < 0 || n > max) throw new IllegalArgumentException(otherwise);
@@ -236,7 +254,7 @@ public class TemplateEngine {
     }
 
     /** # = digit, A = letter, * = letter or digit. */
-    private static String random(ThreadLocalRandom r, String shape) {
+    private static String random(RandomGenerator r, String shape) {
         StringBuilder sb = new StringBuilder(shape.length());
         for (char c : shape.toCharArray()) {
             String pool = c == '#' ? "0123456789" : c == 'A' ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -246,7 +264,7 @@ public class TemplateEngine {
     }
 
     // ponytail: the mod-97 check digits are valid; national checks (sort code, account modulus) are not modelled.
-    static String iban(ThreadLocalRandom r, String country) {
+    static String iban(RandomGenerator r, String country) {
         String shape = BBAN.get(country);
         if (shape == null) throw new IllegalArgumentException("{{iban}} supports " + new java.util.TreeSet<>(BBAN.keySet()));
         String bban = random(r, shape);

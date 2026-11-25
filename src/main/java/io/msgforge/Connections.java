@@ -138,8 +138,11 @@ public class Connections {
         return type != null && type.canReceive();
     }
 
-    /** Starts receiving from a destination on a saved connection. The caller closes the subscription. onError gets a receiver's failure as text that is safe to show. */
-    public TransportType.Subscription subscribe(String id, String destination, Consumer<String> onMessage, Consumer<String> onError) {
+    /**
+     * Starts receiving from a destination on a saved connection. The caller closes the subscription.
+     * onError gets a receiver's failure as text that is safe to show.
+     */
+    public TransportType.Subscription receive(String id, String destination, Consumer<TransportType.Arrival> onArrival, Consumer<String> onError) {
         Connection c;
         synchronized (this) {
             c = find(id);
@@ -149,7 +152,7 @@ public class Connections {
         Guard guard = guard(c, type, settings);
         // A thread the type starts for receiving inherits the context loader the guard sets.
         // an error from the receiver's own thread gets the same treatment as one thrown from a call
-        TransportType.Subscription subscription = guard.call(() -> type.subscribe(settings, destination, onMessage, e -> onError.accept(guard.describe(e))));
+        TransportType.Subscription subscription = guard.call(() -> type.receive(settings, destination, onArrival, e -> onError.accept(guard.describe(e))));
         return new TransportType.Subscription() {
             @Override
             public void check() {
@@ -169,6 +172,11 @@ public class Connections {
         };
     }
 
+    /** {@link #receive} for the bodies alone. */
+    public TransportType.Subscription subscribe(String id, String destination, Consumer<String> onMessage, Consumer<String> onError) {
+        return receive(id, destination, arrival -> onMessage.accept(arrival.body()), onError);
+    }
+
     private TransportType.Sender open(Connection c) {
         TransportType type = type(c);
         Map<String, String> settings = resolve(c.settings());
@@ -181,6 +189,11 @@ public class Connections {
                     sender.send(destination, body, headers);
                     return null;
                 });
+            }
+
+            @Override
+            public String sendForId(String destination, String body, Map<String, String> headers) {
+                return guard.call(() -> sender.sendForId(destination, body, headers));
             }
 
             @Override
@@ -318,21 +331,28 @@ public class Connections {
      */
     Map<String, String> resolve(Map<String, String> settings) {
         Map<String, String> out = new LinkedHashMap<>();
-        settings.forEach((key, value) -> {
-            Matcher m = ENV.matcher(value);
-            out.put(key, m.replaceAll(r -> {
-                String name = r.group(1);
-                if (!name.startsWith("MSGFORGE_") && envAllow.stream().noneMatch(p -> p.matcher(name).matches())) {
-                    throw new IllegalArgumentException("Environment variable " + name + " may not be used in a connection. "
-                            + "Give it a name that starts with MSGFORGE_, or start msgforge with MSGFORGE_ENV_ALLOW=" + name
-                            + " (a comma-separated list of names; * stands for any characters).");
-                }
-                String env = System.getenv(name);
-                if (env == null) throw new IllegalArgumentException("Environment variable " + name + " is not set");
-                return Matcher.quoteReplacement(env);
-            }));
-        });
+        settings.forEach((key, value) -> out.put(key, resolve(value)));
         return out;
+    }
+
+    /**
+     * One text with its ${NAME}s filled in, under the same rule. A destination in a scenario, a watch or a monitor goes
+     * through here, so one saved file serves several environments. Unlike a setting, a destination is shown and
+     * may be quoted in a broker's error: it is a name, and a variable used for one should hold nothing secret.
+     */
+    public String resolve(String value) {
+        Matcher m = ENV.matcher(value);
+        return m.replaceAll(r -> {
+            String name = r.group(1);
+            if (!name.startsWith("MSGFORGE_") && envAllow.stream().noneMatch(p -> p.matcher(name).matches())) {
+                throw new IllegalArgumentException("Environment variable " + name + " may not be used in a connection. "
+                        + "Give it a name that starts with MSGFORGE_, or start msgforge with MSGFORGE_ENV_ALLOW=" + name
+                        + " (a comma-separated list of names; * stands for any characters).");
+            }
+            String env = System.getenv(name);
+            if (env == null) throw new IllegalArgumentException("Environment variable " + name + " is not set");
+            return Matcher.quoteReplacement(env);
+        });
     }
 
     private View view(Connection c) {

@@ -87,6 +87,11 @@ public class IbmMqType implements TransportType {
             }
 
             @Override
+            public String sendForId(String destination, String body, Map<String, String> headers) {
+                return sender.sendForId(destination, body, headers);
+            }
+
+            @Override
             public void check() throws Exception {
                 try {
                     sender.check();
@@ -131,9 +136,9 @@ public class IbmMqType implements TransportType {
 
     /** Consumes: every message it receives is taken off the queue. */
     @Override
-    public Subscription subscribe(Map<String, String> s, String destination, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
+    public Subscription receive(Map<String, String> s, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
         try {
-            return new JmsReceiver(factory(s), destination, onMessage, onError);
+            return JmsReceiver.arrivals(factory(s), destination, onArrival, onError);
         } catch (jakarta.jms.JMSException e) {
             throw advised(e, s);
         }

@@ -39,9 +39,14 @@ public class Api {
     private final Connections connections;
     private final Scenarios scenarios;
     private final Recogniser recogniser;
+    private final Monitors monitors;
+    private final Reports reports;
 
-    public Api(Packs packs, Runs runs, TemplateEngine engine, Connections connections, Scenarios scenarios, Recogniser recogniser) {
+    public Api(Packs packs, Runs runs, TemplateEngine engine, Connections connections, Scenarios scenarios, Recogniser recogniser,
+               Monitors monitors, Reports reports) {
         this.recogniser = recogniser;
+        this.monitors = monitors;
+        this.reports = reports;
         this.packs = packs;
         this.runs = runs;
         this.engine = engine;
@@ -174,15 +179,13 @@ public class Api {
 
     @PostMapping("/scenarios")
     public Scenarios.Scenario createScenario(@RequestBody Scenarios.Scenario s) {
-        return scenarios.save(new Scenarios.Scenario(null, s.name(), s.parts(), s.targets(), s.mode(), s.count(), s.rate(), s.headers(),
-                s.timeoutSeconds(), s.match()));
+        return scenarios.save(s.withId(null));
     }
 
     @PutMapping("/scenarios/{id}")
     public Scenarios.Scenario updateScenario(@PathVariable String id, @RequestBody Scenarios.Scenario s) {
         scenarios.get(id); // 404 rather than silently creating a new one
-        return scenarios.save(new Scenarios.Scenario(id, s.name(), s.parts(), s.targets(), s.mode(), s.count(), s.rate(), s.headers(),
-                s.timeoutSeconds(), s.match()));
+        return scenarios.save(s.withId(id));
     }
 
     @DeleteMapping("/scenarios/{id}")
@@ -207,22 +210,79 @@ public class Api {
         return runs.list();
     }
 
+    /** One run in full: the list's view, the series over time, and what arrived on each watched destination. */
+    @GetMapping("/runs/{id}")
+    public Runs.Detail run(@PathVariable String id) {
+        return runs.detail(id, true);
+    }
+
     @DeleteMapping("/runs/{id}")
     public void cancel(@PathVariable String id) {
         runs.cancel(id);
     }
 
+    /** The run as a file: format is html, json, csv (the summary) or series (the series over time, as CSV). */
+    @GetMapping("/runs/{id}/report")
+    public ResponseEntity<String> report(@PathVariable String id, @RequestParam(defaultValue = "html") String format) {
+        Runs.Detail detail = runs.detail(id, false);
+        return download(Reports.fileName(detail.run(), format), reports.render(detail, format));
+    }
+
+    // ---- saved reports
+
+    @GetMapping("/reports")
+    public Reports.Saved reports() {
+        return reports.saved();
+    }
+
+    @GetMapping("/reports/{name}")
+    public ResponseEntity<String> savedReport(@PathVariable String name) {
+        return download(name, reports.read(name));
+    }
+
+    /** As a download, and never as a page of this site: a report quotes names and errors that came from outside. */
+    private static ResponseEntity<String> download(String name, String content) {
+        String type = name.endsWith(".html") ? "text/html" : name.endsWith(".json") ? "application/json" : "text/csv";
+        return ResponseEntity.ok().header("Content-Type", type + ";charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=\"" + name + "\"")
+                .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'").body(content);
+    }
+
+    // ---- monitors
+
+    @GetMapping("/monitors")
+    public List<Monitors.View> monitors() {
+        return monitors.list();
+    }
+
+    @PostMapping("/monitors")
+    public Monitors.View startMonitor(@RequestBody Monitors.Request request) {
+        return monitors.start(request);
+    }
+
+    @PostMapping("/monitors/{id}/reset")
+    public Monitors.View resetMonitor(@PathVariable String id) {
+        return monitors.reset(id);
+    }
+
+    @DeleteMapping("/monitors/{id}")
+    public void stopMonitor(@PathVariable String id) {
+        monitors.stop(id);
+    }
+
+    // ---- messages
+
     /** The latest messages without their bodies and headers: the console asks for this every second, and a body can be 1 MB. */
-    public record MessageView(String runId, int n, int target, String connection, String destination, String template, Instant at) {}
+    public record MessageView(String runId, long n, int target, String connection, String destination, String template, Instant at, String fault) {}
 
     @GetMapping("/messages")
     public List<MessageView> messages() {
-        return runs.messages().stream().map(m -> new MessageView(m.runId(), m.n(), m.target(), m.connection(), m.destination(), m.template(), m.at())).toList();
+        return runs.messages().stream().map(m -> new MessageView(m.runId(), m.n(), m.target(), m.connection(), m.destination(), m.template(), m.at(), m.fault())).toList();
     }
 
     /** One message in full, for when it is selected. */
     @GetMapping("/messages/{runId}/{n}/{target}")
-    public Runs.Sent message(@PathVariable String runId, @PathVariable int n, @PathVariable int target) {
+    public Runs.Sent message(@PathVariable String runId, @PathVariable long n, @PathVariable int target) {
         return runs.message(runId, n, target);
     }
 

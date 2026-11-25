@@ -752,16 +752,42 @@ class MsgforgeTest {
         Runs runs = new Runs(packs, engine, store);
         Runs.Request verified = new Runs.Request(null, null, null, null, 5, 0, null, "demo", "order.json", "m{{seq}} {{uuid}}", null, id, "Q", new Runs.Target(id, "OUT"), 60, null);
 
+        // One send that fails is a result, not the end: it is counted with its error, and the run goes on to the last message.
+        Runs.Request plain = new Runs.Request(null, null, null, null, 5, 0, null, "demo", "order.json", "m{{seq}} {{uuid}}", null, id, "Q", null, null, null);
         sender.onSend = body -> { if (body.startsWith("m3 ")) throw new IllegalStateException("broker went away"); };
+        Runs.View oneLost = finished(runs, runs.start(plain).id());
+        assertEquals(Runs.Status.DONE, oneLost.status());
+        assertEquals(4, oneLost.sent());
+        assertEquals(1, oneLost.failed());
+        assertEquals("FAIL", oneLost.verdict(), "nothing to verify, and still not a run to call good");
+        assertEquals(List.of("broker went away"), oneLost.errors().stream().map(Stats.ErrorCount::message).toList());
+        assertEquals(1, oneLost.errors().get(0).count());
+        assertEquals(4, sender.bodies.size());
+        assertEquals(1, sender.closed.get());
+        sender.bodies.clear();
+
+        // A connection that is plainly gone ends the run: a hundred sends in a row failed, and nobody wants the other 899,900.
+        sender.onSend = body -> { if (!body.startsWith("m1 ") && !body.startsWith("m2 ")) throw new IllegalStateException("broker went away"); };
+        Runs.View gone = finished(runs, runs.start(new Runs.Request(null, null, null, null, 900_000, 0, null, "demo", "order.json", "m{{seq}} {{uuid}}", null, id, "Q", null, null, null)).id());
+        assertEquals(Runs.Status.FAILED, gone.status());
+        assertEquals("Stopped after 100 sends in a row failed: broker went away", gone.error());
+        assertEquals(2, gone.sent());
+        assertEquals(100, gone.failed());
+        assertEquals(2, sender.bodies.size(), "nothing is sent after the run gave up");
+        assertNull(gone.verdict(), "a run that failed has a status, not a verdict");
+        assertEquals(2, sender.closed.get());
+        sender.bodies.clear();
+
+        // A verified run in which nothing could be sent has no result either: it fails with the reason, and does not wait for arrivals.
+        sender.onSend = body -> { throw new IllegalStateException("broker went away"); };
         Runs.View failed = finished(runs, runs.start(verified).id());
         assertEquals(Runs.Status.FAILED, failed.status());
         assertEquals("broker went away", failed.error());
-        assertEquals(2, failed.sent());
-        assertEquals(2, sender.bodies.size(), "nothing is sent after the failure");
-        assertNull(failed.verdict(), "a run that failed has a status, not a verdict");
+        assertEquals(0, failed.sent());
+        assertNull(failed.verdict());
         assertTrue(failed.checks().isEmpty());
         assertTrue(failed.finishedAt() != null);
-        assertEquals(1, sender.closed.get());
+        assertEquals(3, sender.closed.get());
         assertEquals(1, subscriptionsClosed.get());
 
         // an exception that carries no message is named, where the error used to read "null"
@@ -794,7 +820,7 @@ class MsgforgeTest {
         assertEquals(Runs.Status.FAILED, broken.status());
         assertEquals("org/example/Missing", broken.error());
         assertEquals(1, broken.sent());
-        assertEquals(4, sender.closed.get());
+        assertEquals(6, sender.closed.get());
         assertEquals(3, subscriptionsClosed.get(), "every verified run closed its subscription");
     }
 

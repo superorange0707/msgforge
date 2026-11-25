@@ -44,6 +44,9 @@ class CliTest {
                    "targets":[{"connection":"dry-run","destination":"IN"}],"count":2,"rate":0},
                   {"id":"s-nopack","name":"No pack","parts":[{"pack":"gone","template":"a.txt","weight":1}],
                    "targets":[{"connection":"dry-run","destination":"IN"}],"count":1,"rate":0},
+                  {"id":"s-load","name":"Load","parts":[{"pack":"demo","template":"order.json","weight":1}],
+                   "targets":[{"connection":"dry-run","destination":"IN"}],"count":0,"rate":200,
+                   "load":{"durationSeconds":60,"senders":1},"invalid":{"percent":10,"kinds":["truncated","type-changed"]}},
                   {"id":"twin-1","name":"Twin",%s},
                   {"id":"twin-2","name":"Twin",%s}]}""".formatted(loop, loop, loop));
     }
@@ -162,6 +165,36 @@ class CliTest {
     }
 
     @Test
+    void theLoadOptionsReplaceTheScenariosPlanAndSaveWritesEveryReport() throws Exception {
+        Path out = dir.resolve("saved");
+        Result r = cli("run", "Load", "--duration", "1", "--ramp-up=1", "--senders", "2", "--seed", "9", "--invalid", "40", "--save", out.toString());
+        assertEquals(0, r.code(), r.out());
+        assertTrue(r.out().contains("no number of messages, for 1 s at most, 200.0 a second"), r.out());
+        assertTrue(r.out().contains("DONE (nothing to verify)") && r.out().contains("seed 9") && r.out().contains("send p50"), r.out());
+        java.util.regex.Matcher id = java.util.regex.Pattern.compile("run ([0-9a-f]{8}),").matcher(r.out());
+        assertTrue(id.find(), r.out());
+        java.util.regex.Matcher sent = java.util.regex.Pattern.compile("done, sent (\\d+), invalid (\\d+)").matcher(r.out());
+        assertTrue(sent.find(), r.out());
+        int n = Integer.parseInt(sent.group(1)), invalid = Integer.parseInt(sent.group(2));
+        assertTrue(n > 50 && n <= 101, "200 a second reached over the one second it ran: " + n);
+        assertTrue(invalid > n / 5 && invalid < n * 3 / 5, "40 percent of " + n + ": " + invalid);
+        for (String file : List.of(".html", ".json", ".csv", ".series.csv")) assertTrue(Files.size(out.resolve("msgforge-" + id.group(1) + file)) > 60, file);
+        assertTrue(Files.readString(out.resolve("msgforge-" + id.group(1) + ".csv")).contains("\r\nseed,9\r\n"));
+        assertTrue(Files.readString(out.resolve("msgforge-" + id.group(1) + ".html")).contains("<svg class=\"chart\""));
+
+        // the loop hands invalid messages back like any others: a system that accepts them fails the run
+        Result accepted = cli("run", "Loop", "--invalid", "50", "--seed", "3", "--count", "20");
+        assertEquals(1, accepted.code(), accepted.out());
+        assertTrue(accepted.out().contains("FAIL order.json (invalid) → nowhere: sent ") && accepted.out().contains("accepted although invalid"), accepted.out());
+        // an option that cannot work is the scenario's error, with the reason
+        Result csv = cli("run", "Send only", "--invalid", "50");
+        assertEquals(2, csv.code(), csv.out());
+        assertTrue(csv.out().contains("reading.csv is neither JSON nor XML"), csv.out());
+        assertEquals(2, cli("run", "Load", "--senders", "many").code());
+        assertTrue(cli("run", "Load", "--senders", "many").out().contains("--senders needs a number, not many"));
+    }
+
+    @Test
     void listShowsIdsAndNamesAndChangesNothing() throws Exception {
         String before = Files.readString(dir.resolve("msgforge.json"));
         Result r = cli("list");
@@ -190,6 +223,15 @@ class CliTest {
             Result noPack = cli("run", "No pack", "--url", url);
             assertEquals(2, noPack.code(), noPack.out());
             assertTrue(noPack.out().contains("answered 4"), noPack.out());
+
+            // the load options and the reports travel over the API too
+            Path saved = dir.resolve("remote-saved");
+            Result load = cli("run", "Load", "--url", url, "--duration", "1", "--senders", "2", "--seed", "4", "--save", saved.toString());
+            assertEquals(0, load.code(), load.out());
+            assertTrue(load.out().contains("seed 4") && load.out().contains("for 1 s at most"), load.out());
+            try (var files = Files.list(saved)) {
+                assertEquals(4, files.count());
+            }
 
             assertEquals(2, cli("run", "Nope", "--url", url).code());
             assertTrue(cli("list", "--url", url).out().contains("s-plain  Send only"));

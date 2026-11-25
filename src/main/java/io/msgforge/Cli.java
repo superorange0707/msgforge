@@ -27,7 +27,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 /**
  * msgforge without the console: run a saved scenario and exit with its verdict, for a pipeline.
  *
- *   run <scenario> [--report file] [--url http://host:port] [--count n] [--rate r]
+ *   run <scenario> [--report file] [--save dir] [--url http://host:port] [--count n] [--rate r]
+ *                  [--duration s] [--ramp-up s] [--senders n] [--seed n] [--invalid percent]
  *   list [--url http://host:port]
  *
  * Without --url it reads the same settings as the server (msgforge.json, packs, plugins, MSGFORGE_* and --msgforge.*)
@@ -65,9 +66,12 @@ final class Cli {
     private interface Backend extends AutoCloseable {
         List<JsonNode> scenarios() throws Exception;
 
-        JsonNode start(JsonNode scenario, Integer count, Double rate) throws Exception;
+        JsonNode start(JsonNode scenario, Scenarios.Overrides overrides) throws Exception;
 
         JsonNode run(String id) throws Exception;
+
+        /** The run as a report in one of {@link Reports#FORMATS}. */
+        String report(String id, String format) throws Exception;
 
         void cancel(String id);
 
@@ -76,10 +80,11 @@ final class Cli {
     }
 
     private int execute(String[] args) {
-        String command = command(args), scenario = null, report = null, url = null;
+        String command = command(args), scenario = null, report = null, save = null, url = null;
         boolean commandSeen = false;
-        Integer count = null;
-        Double rate = null;
+        Integer count = null, duration = null, rampUp = null, senders = null;
+        Double rate = null, invalid = null;
+        Long seed = null;
         List<String> spring = new ArrayList<>();   // everything else is a setting, as for the server
         try {
             for (int i = 0; i < args.length; i++) {
@@ -88,7 +93,7 @@ final class Cli {
                     continue;
                 }
                 String a = args[i], name = a.contains("=") ? a.substring(0, a.indexOf('=')) : a;
-                boolean ours = List.of("--report", "--url", "--count", "--rate").contains(name);
+                boolean ours = List.of("--report", "--save", "--url", "--count", "--rate", "--duration", "--ramp-up", "--senders", "--seed", "--invalid").contains(name);
                 String value = !ours ? null : a.contains("=") ? a.substring(a.indexOf('=') + 1) : ++i < args.length ? args[i] : null;
                 if (ours && value == null) throw new IllegalArgumentException(name + " needs a value");
                 switch (name) {
@@ -96,6 +101,12 @@ final class Cli {
                     case "--url" -> url = value.replaceAll("/+$", "");
                     case "--count" -> count = number(name, value, Integer::valueOf);
                     case "--rate" -> rate = number(name, value, Double::valueOf);
+                    case "--save" -> save = value;
+                    case "--duration" -> duration = number(name, value, Integer::valueOf);
+                    case "--ramp-up" -> rampUp = number(name, value, Integer::valueOf);
+                    case "--senders" -> senders = number(name, value, Integer::valueOf);
+                    case "--seed" -> seed = number(name, value, Long::valueOf);
+                    case "--invalid" -> invalid = number(name, value, Double::valueOf);
                     default -> {
                         if (a.startsWith("--")) spring.add(a);
                         else if (scenario == null && command.equals("run")) scenario = a;
@@ -108,7 +119,8 @@ final class Cli {
             out.println("msgforge: " + e.getMessage() + ". bin/msgforge --help shows the usage.");
             return ERROR;
         }
-        Path reportFile = report == null ? null : workdir().resolve(report);
+        Path reportFile = report == null ? null : workdir().resolve(report), saveDir = save == null ? null : workdir().resolve(save);
+        Scenarios.Overrides overrides = new Scenarios.Overrides(count, rate, duration, rampUp, senders, seed, invalid);
 
         Backend backend;
         try {
@@ -125,7 +137,7 @@ final class Cli {
                 for (JsonNode s : scenarios) out.println(s.path("id").asText() + "  " + s.path("name").asText());
                 return PASSED;
             }
-            return run(backend, find(scenarios, scenario), count, rate, reportFile);
+            return run(backend, find(scenarios, scenario), overrides, reportFile, saveDir);
         } catch (Exception e) {
             return error(scenario, reportFile, Runs.describe(e));
         }
@@ -154,26 +166,26 @@ final class Cli {
                 + String.join(", ", named.stream().map(s -> s.path("id").asText()).toList()));
     }
 
-    private int run(Backend backend, JsonNode scenario, Integer count, Double rate, Path report) throws Exception {
+    private int run(Backend backend, JsonNode scenario, Scenarios.Overrides overrides, Path report, Path saveDir) throws Exception {
         String name = scenario.path("name").asText();
-        JsonNode run = backend.start(scenario, count, rate);
+        JsonNode run = backend.start(scenario, overrides);
         String id = run.path("id").asText();
-        out.println("Scenario " + name + ": run " + id + ", " + run.path("count").asInt() + " messages");
+        out.println("Scenario " + name + ": run " + id + ", " + plan(run));
         // A pipeline that is cancelled stops the JVM; the run on a server would otherwise carry on.
         Thread cancel = new Thread(() -> backend.cancel(id));
         Runtime.getRuntime().addShutdownHook(cancel);
         String status = "";
-        int sent = -1;
-        long lastPrint = 0;
+        long done = -1, lastPrint = 0;
         while (true) {
             run = backend.run(id);
             // the status is what a run sets last when it ends, so a view that says it ended has everything else too
             boolean ended = !List.of("RUNNING", "VERIFYING").contains(run.path("status").asText());
-            if (!run.path("status").asText().equals(status) || (System.nanoTime() - lastPrint > 2_000_000_000L && run.path("sent").asInt() != sent) || ended) {
+            long handled = run.path("sent").asLong() + run.path("failed").asLong();
+            if (!run.path("status").asText().equals(status) || (System.nanoTime() - lastPrint > 2_000_000_000L && handled != done) || ended) {
                 status = run.path("status").asText();
-                sent = run.path("sent").asInt();
+                done = handled;
                 lastPrint = System.nanoTime();
-                out.println("  " + status.toLowerCase() + ", sent " + sent + " of " + run.path("count").asInt());
+                out.println("  " + status.toLowerCase() + ", " + progress(run));
             }
             if (ended) break;
             Thread.sleep(200);
@@ -181,11 +193,36 @@ final class Cli {
         Runtime.getRuntime().removeShutdownHook(cancel);
 
         for (JsonNode c : run.path("checks")) out.println("  " + (passed(c) ? "PASS " : "FAIL ") + checkName(c) + ": " + counts(c));
+        for (JsonNode e : run.path("errors")) out.println("  " + e.path("count").asLong() + " x " + e.path("message").asText());
+        JsonNode latency = run.path("latency");
+        if (latency.isObject()) {
+            out.println("  " + run.path("actualRate").asText() + " a second on average over " + run.path("elapsedMs").asLong() / 1000.0 + " s, send p50 "
+                    + latency.path("p50").asText() + " ms, p95 " + latency.path("p95").asText() + " ms, p99 " + latency.path("p99").asText() + " ms, seed " + run.path("seed").asText());
+        }
         String verdict = run.path("verdict").asText(null);
         int code = !status.equals("DONE") ? ERROR : "FAIL".equals(verdict) ? FAILED : PASSED;
         out.println(code == ERROR ? status + ": " + run.path("error").asText("") : verdict != null ? verdict : "DONE (nothing to verify)");
         if (report != null) writeReport(report, name, run);
+        if (saveDir != null) {
+            for (String format : Reports.FORMATS) {
+                String file = "msgforge-" + id + "." + (format.equals("series") ? "series.csv" : format);
+                write(saveDir.resolve(file), backend.report(id, format));
+            }
+            out.println("Reports written to " + saveDir + " (msgforge-" + id + ".html, .json, .csv, .series.csv)");
+        }
         return code;
+    }
+
+    private static String plan(JsonNode run) {
+        long count = run.path("count").asLong();
+        int duration = run.path("durationSeconds").asInt(0);
+        return (count > 0 ? count + " messages" : "no number of messages") + (duration > 0 ? ", for " + duration + " s at most" : count > 0 ? "" : ", until stopped")
+                + (run.path("rate").isNumber() ? ", " + run.path("rate").asText() + " a second" : "");
+    }
+
+    private static String progress(JsonNode run) {
+        long count = run.path("count").asLong(), failed = run.path("failed").asLong(), invalid = run.path("invalid").asLong();
+        return "sent " + run.path("sent").asLong() + (count > 0 ? " of " + count : "") + (failed > 0 ? ", failed " + failed : "") + (invalid > 0 ? ", invalid " + invalid : "");
     }
 
     private static boolean passed(JsonNode c) {
@@ -193,12 +230,15 @@ final class Cli {
     }
 
     private static String checkName(JsonNode c) {
-        return c.path("template").asText() + " → " + c.path("expected").asText();
+        return c.path("template").asText() + (c.path("invalid").asBoolean() ? " (invalid)" : "") + " → " + c.path("expected").asText();
     }
 
     private static String counts(JsonNode c) {
-        return "sent " + c.path("sent").asInt() + ", arrived " + c.path("arrived").asInt() + ", misrouted " + c.path("misrouted").asInt()
-                + ", missing " + c.path("missing").asInt()
+        boolean invalid = c.path("invalid").asBoolean();
+        return "sent " + c.path("sent").asInt() + (invalid ? ", rejected as expected " : ", arrived ") + c.path("arrived").asInt()
+                + (c.path("accepted").asInt() > 0 ? ", accepted although invalid " + c.path("accepted").asInt() : "")
+                + (c.path("rejected").asInt() > 0 ? ", valid but rejected " + c.path("rejected").asInt() : "")
+                + ", misrouted " + c.path("misrouted").asInt() + ", missing " + c.path("missing").asInt()
                 + (c.path("medianMs").isNull() ? "" : ", median " + c.path("medianMs").asLong() + " ms, max " + c.path("maxMs").asLong() + " ms");
     }
 
@@ -226,7 +266,9 @@ final class Cli {
             errors++;
             cases.add(testcase(name, seconds, "<error message=\"" + xml(status + ": " + run.path("error").asText("")) + "\"/>"));
         } else if (run.path("checks").isEmpty()) {
-            cases.add(testcase(name, seconds, ""));
+            long failed = run.path("failed").asLong();
+            if (failed > 0) failures++;
+            cases.add(testcase(name, seconds, failed == 0 ? "" : "<failure message=\"" + xml(failed + " of " + (failed + run.path("sent").asLong()) + " sends failed") + "\"/>"));
         } else {
             for (JsonNode c : run.path("checks")) {
                 if (!passed(c)) failures++;
@@ -282,17 +324,22 @@ final class Cli {
         ConfigurableApplicationContext context = app.run(settings.toArray(String[]::new));
         Scenarios scenarios = context.getBean(Scenarios.class);
         Runs runs = context.getBean(Runs.class);
+        Reports reports = context.getBean(Reports.class);
         return new Backend() {
             public List<JsonNode> scenarios() {
                 return scenarios.list().stream().map(s -> (JsonNode) json.valueToTree(s)).toList();
             }
 
-            public JsonNode start(JsonNode scenario, Integer count, Double rate) {
-                return json.valueToTree(scenarios.run(scenario.path("id").asText(), count, rate));
+            public JsonNode start(JsonNode scenario, Scenarios.Overrides overrides) {
+                return json.valueToTree(scenarios.run(scenario.path("id").asText(), overrides));
             }
 
             public JsonNode run(String id) {
-                return json.valueToTree(runs.list().stream().filter(r -> r.id().equals(id)).findFirst().orElseThrow());
+                return json.valueToTree(runs.detail(id, false).run());
+            }
+
+            public String report(String id, String format) {
+                return reports.render(runs.detail(id, false), format);
             }
 
             public void cancel(String id) {
@@ -310,15 +357,7 @@ final class Cli {
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         return new Backend() {
             JsonNode call(String method, String path, JsonNode body) throws Exception {
-                HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url + path)).timeout(Duration.ofSeconds(30))
-                        .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body.toString()));
-                if (body != null) request.header("Content-Type", "application/json");
-                HttpResponse<String> response;
-                try {
-                    response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-                } catch (java.net.ConnectException e) {
-                    throw new IllegalStateException("cannot reach " + url + " (" + Runs.describe(e) + ")");
-                }
+                HttpResponse<String> response = send(method, path, body);
                 JsonNode answer;
                 try {
                     answer = response.body().isBlank() ? json.missingNode() : json.readTree(response.body());
@@ -332,27 +371,51 @@ final class Cli {
                 return answer;
             }
 
+            HttpResponse<String> send(String method, String path, JsonNode body) throws Exception {
+                HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url + path)).timeout(Duration.ofSeconds(30))
+                        .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body.toString()));
+                if (body != null) request.header("Content-Type", "application/json");
+                try {
+                    return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+                } catch (java.net.ConnectException e) {
+                    throw new IllegalStateException("cannot reach " + url + " (" + Runs.describe(e) + ")");
+                }
+            }
+
             public List<JsonNode> scenarios() throws Exception {
                 List<JsonNode> list = new ArrayList<>();
                 call("GET", "/api/scenarios", null).forEach(list::add);
                 return list;
             }
 
-            /** The scenario as a run request, which is what the server does with it too; this way --count and --rate fit in. */
-            public JsonNode start(JsonNode scenario, Integer count, Double rate) throws Exception {
+            /** The scenario as a run request, which is what the server does with it too; this way the options fit in. */
+            public JsonNode start(JsonNode scenario, Scenarios.Overrides o) throws Exception {
                 ObjectNode request = scenario.deepCopy();
                 request.put("label", scenario.path("name").asText());
                 request.remove(List.of("id", "name"));
-                if (count != null) request.put("count", count);
-                if (rate != null) request.put("rate", rate);
+                if (o.count() != null) request.put("count", o.count());
+                if (o.rate() != null) request.put("rate", o.rate());
+                if (o.seed() != null) request.put("seed", o.seed());
+                if (o.durationSeconds() != null || o.rampUpSeconds() != null || o.senders() != null) {
+                    ObjectNode load = request.path("load").isObject() ? (ObjectNode) request.get("load") : request.putObject("load");
+                    if (o.durationSeconds() != null) load.put("durationSeconds", o.durationSeconds());
+                    if (o.rampUpSeconds() != null) load.put("rampUpSeconds", o.rampUpSeconds());
+                    if (o.senders() != null) load.put("senders", o.senders());
+                }
+                if (o.invalidPercent() != null) {
+                    (request.path("invalid").isObject() ? (ObjectNode) request.get("invalid") : request.putObject("invalid")).put("percent", o.invalidPercent());
+                }
                 return call("POST", "/api/runs", request);
             }
 
-            // ponytail: the API has no single-run lookup, so the list is read. It keeps the 20 latest runs that have ended:
-            // on a server where more than 20 others end while this one is followed, this one is lost.
             public JsonNode run(String id) throws Exception {
-                for (JsonNode r : call("GET", "/api/runs", null)) if (r.path("id").asText().equals(id)) return r;
-                throw new IllegalStateException("run " + id + " is no longer listed on " + url);
+                return call("GET", "/api/runs/" + id, null).path("run");
+            }
+
+            public String report(String id, String format) throws Exception {
+                HttpResponse<String> response = send("GET", "/api/runs/" + id + "/report?format=" + format, null);
+                if (response.statusCode() != 200) throw new IllegalStateException(url + " answered " + response.statusCode() + " for the report");
+                return response.body();
             }
 
             public void cancel(String id) {

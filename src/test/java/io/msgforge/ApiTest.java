@@ -73,6 +73,7 @@ class ApiTest {
         registry.add("msgforge.packs", () -> dir.resolve("packs") + ",packs");
         registry.add("msgforge.allowed-hosts", () -> "console.example, Other.Example");
         registry.add("msgforge.env-allow", () -> "HOME");
+        registry.add("msgforge.reports", () -> dir.resolve("reports").toString());
         registry.add("spring.artemis.embedded.enabled", () -> "false");   // the broker on the test classpath belongs to MsgforgeTest
     }
 
@@ -306,8 +307,8 @@ class ApiTest {
     void aScenarioIsCheckedWhenItIsSaved() throws Exception {
         String scenario = "{\"name\":\"S\",\"parts\":[{\"pack\":\"not-there-yet\",\"template\":\"t.json\",\"weight\":%s}],"
                 + "\"targets\":[{\"connection\":\"later\",\"destination\":\"Q\"}],\"count\":%s,\"rate\":%s,\"timeoutSeconds\":%s}";
-        mvc.perform(body(post("/api/scenarios"), scenario.formatted(1, 99999999, 0, 10))).andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("Messages must be 1 to 1000000"));
+        mvc.perform(body(post("/api/scenarios"), scenario.formatted(1, 2000000000, 0, 10))).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Messages must be 1 to 1000000000"));
         mvc.perform(body(post("/api/scenarios"), scenario.formatted(1, 0, 0, 10))).andExpect(status().isBadRequest());
         mvc.perform(body(post("/api/scenarios"), scenario.formatted(1, 5, -1, 10))).andExpect(status().isBadRequest());
         mvc.perform(body(post("/api/scenarios"), scenario.formatted(1001, 5, 0, 10))).andExpect(status().isBadRequest());
@@ -315,7 +316,7 @@ class ApiTest {
                 .andExpect(jsonPath("$.error").value("Timeout must be 1 to 600 seconds"));
         // its pack and connection are not: it can be prepared before they exist
         String id = sent(post("/api/scenarios"), scenario.formatted(1, 5, 0, 10)).get("id").asText();
-        mvc.perform(body(put("/api/scenarios/" + id), scenario.formatted(1, 99999999, 0, 10))).andExpect(status().isBadRequest());
+        mvc.perform(body(put("/api/scenarios/" + id), scenario.formatted(1, 2000000000, 0, 10))).andExpect(status().isBadRequest());
         mvc.perform(delete("/api/scenarios/" + id)).andExpect(status().isOk());
     }
 
@@ -427,5 +428,197 @@ class ApiTest {
         mvc.perform(post("/api/recognise").param("pack", "demo").contentType(MediaType.TEXT_PLAIN).content("x".repeat(1_000_001))).andExpect(status().isBadRequest());
         // nothing was written: the demo pack still has its three templates
         mvc.perform(get("/api/packs")).andExpect(jsonPath("$[?(@.id == 'demo')].templates.length()").value(hasItem(3)));
+    }
+
+    // ---- load runs, monitors, reports, metrics
+
+    @Test
+    void aLoadRunHasItsStatisticsItsDetailAndItsReports() throws Exception {
+        // dry run hands a message to whoever listens on its destination, so watching the destination sent to sees every message
+        String id = sent(post("/api/runs"), """
+                {"label":"Nightly <soak>","pack":"demo","template":"order.json","connection":"dry-run","destination":"LOAD.IN","count":60,"rate":0,
+                 "load":{"senders":2},"invalid":{"percent":50,"kinds":["empty","field-removed"]},"seed":7,
+                 "watches":[{"connection":"dry-run","destination":"LOAD.IN","buckets":[{"pointer":"/currency"},{"name":"has id","regex":"orderId"}]}]}""").get("id").asText();
+        JsonNode run = lastRun();
+        assertEquals(id, run.get("id").asText());
+        assertEquals("DONE", run.get("status").asText());
+        assertEquals(60, run.get("sent").asInt());
+        assertEquals(0, run.get("failed").asInt());
+        assertEquals(7, run.get("seed").asInt());
+        assertEquals(2, run.get("senders").asInt());
+        assertTrue(run.get("invalid").asInt() > 10 && run.get("invalid").asInt() < 50, run.toString());
+        assertEquals(run.get("invalid").asInt(), run.get("faults").get("empty").asInt() + run.get("faults").get("field-removed").asInt());
+        assertTrue(run.get("latency").get("p99").isNumber() && run.get("actualRate").asDouble() > 0 && run.get("targetRate").isNull(), run.toString());
+        assertEquals(60, run.get("watched").get(0).get("count").asInt());
+        assertTrue(run.get("verdict").isNull(), "nothing to verify, nothing failed");
+
+        JsonNode detail = json.readTree(mvc.perform(get("/api/runs/" + id)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(id, detail.get("run").get("id").asText());
+        assertEquals(60, detail.get("series").get(0).get("sent").asInt());
+        JsonNode watch = detail.get("watches").get(0);
+        assertEquals("/currency", watch.get("tables").get(0).get("name").asText());
+        assertEquals("has id", watch.get("tables").get(1).get("name").asText());
+        assertEquals(60, watch.get("tables").get(0).get("values").findValues("count").stream().mapToInt(JsonNode::asInt).sum());
+        assertTrue(watch.get("recent").size() == 50 && watch.get("samples").size() == 3, "the newest 50 arrivals without their bodies, and three bodies as a sample");
+        // the Sent list says which fault a message was given
+        String messages = mvc.perform(get("/api/messages")).andReturn().getResponse().getContentAsString();
+        assertTrue(messages.contains("\"fault\":\"empty\"") && messages.contains("\"fault\":null"), messages);
+
+        // the run as a file, in each format; always a download, never a page of the console
+        String name = "msgforge-\\d{8}-\\d{9}-" + id + "-Nightly-soak\\.";
+        String html = mvc.perform(get("/api/runs/" + id + "/report")).andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/html;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.matchesPattern("attachment; filename=\"" + name + "html\"")))
+                .andExpect(header().stringValues("Content-Security-Policy", hasItem(containsString("sandbox")))).andReturn().getResponse().getContentAsString();
+        assertTrue(html.contains("Nightly &lt;soak&gt;") && html.contains("<svg class=\"chart\"") && !html.contains("<soak>"), html);
+        mvc.perform(get("/api/runs/" + id + "/report?format=json")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "application/json;charset=UTF-8"))
+                .andExpect(jsonPath("$.run.sent").value(60)).andExpect(jsonPath("$.watches[0].samples.length()").value(0));
+        mvc.perform(get("/api/runs/" + id + "/report?format=csv")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.matchesPattern("attachment; filename=\"" + name + "csv\"")))
+                .andExpect(content().string(containsString("\r\nsent,60\r\n")));
+        mvc.perform(get("/api/runs/" + id + "/report?format=series")).andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.matchesPattern("attachment; filename=\"" + name + "series\\.csv\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.startsWith("t_seconds,seconds,target_rate,sent,failed,invalid,sent_rate\r\n0,")));
+        mvc.perform(get("/api/runs/" + id + "/report?format=pdf")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("A report is html, json, csv or series"));
+        mvc.perform(get("/api/runs/nope")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/runs/nope/report")).andExpect(status().isNotFound());
+
+        // with a reports folder set, the run was saved there when it ended
+        JsonNode saved = null;
+        for (int i = 0; i < 100 && saved == null; i++) {
+            for (JsonNode r : json.readTree(mvc.perform(get("/api/reports")).andExpect(jsonPath("$.enabled").value(true)).andReturn().getResponse().getContentAsString()).get("reports")) {
+                if (r.get("id").asText().equals(id)) saved = r;
+            }
+            Thread.sleep(20);
+        }
+        assertEquals("Nightly-soak", saved.get("label").asText());
+        assertEquals(4, saved.get("files").size());
+        mvc.perform(get("/api/reports/" + saved.get("files").get(0).asText())).andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", containsString("attachment"))).andExpect(content().string(containsString("Nightly &lt;soak&gt;")));
+        mvc.perform(get("/api/reports/" + saved.get("files").get(2).asText())).andExpect(status().isOk()).andExpect(content().string(containsString("sent,60")));
+        mvc.perform(get("/api/reports/msgforge.json")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/reports/msgforge-20260101-000000000-0000000a-x.html")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void aRunVerifiesInvalidMessagesAndWhatCannotRunIsA400() throws Exception {
+        // the loop hands every message back, the invalid ones too: accepted although invalid
+        sent(post("/api/runs"), """
+                {"pack":"demo","template":"order.json","connection":"dry-run","destination":"V.IN","count":40,"expect":{"connection":"dry-run","destination":"V.IN"},
+                 "timeoutSeconds":1,"headers":{"ref":"{{ref}}"},"body":"{\\"id\\":\\"{{ref=uuid}}\\"}","match":"{{ref}}","invalid":{"percent":50,"kinds":["empty"]},"seed":1}""");
+        JsonNode run = lastRun();
+        assertEquals("FAIL", run.get("verdict").asText());
+        assertEquals(2, run.get("checks").size());
+        JsonNode invalid = run.get("checks").get(1);
+        assertTrue(invalid.get("invalid").asBoolean());
+        assertEquals("nowhere", invalid.get("expected").asText());
+        assertEquals(invalid.get("sent").asInt(), invalid.get("accepted").asInt());
+        assertEquals(run.get("checks").get(0).get("sent").asInt(), run.get("checks").get(0).get("arrived").asInt());
+
+        String run1 = "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":%s%s}";
+        String[][] refused = {
+                {"0", "", "needs a duration"},
+                {"0", ",\"rate\":5,\"expect\":{\"connection\":\"dry-run\",\"destination\":\"Q\"},\"load\":{\"durationSeconds\":5}", "at most 20000"},
+                {"5", ",\"load\":{\"senders\":99}", "Senders must be 1 to 64"},
+                {"5", ",\"load\":{\"rampUpSeconds\":5}", "A ramp-up needs a rate"},
+                {"5", ",\"invalid\":{\"percent\":120}", "Invalid messages must be 0 to 100 percent"},
+                {"5", ",\"invalid\":{\"percent\":5,\"kinds\":[\"scrambled\"]}", "Unknown kind of invalid message: scrambled"},
+                {"5", ",\"invalid\":{\"percent\":5,\"expect\":{\"connection\":\"dry-run\"}}", "Where invalid messages arrive needs a destination"},
+                {"5", ",\"watches\":[{\"connection\":\"dry-run\",\"destination\":\"W\",\"buckets\":[{\"regex\":\"(\"}]}]", "is not a regular expression"},
+                {"5", ",\"watches\":[{\"connection\":\"dry-run\",\"destination\":\"W\",\"buckets\":[{\"pointer\":\"/a\",\"header\":\"b\"}]}]", "exactly one of pointer, regex and header"},
+                {"5", ",\"watches\":[{\"connection\":\"gone\",\"destination\":\"W\"}]", "which cannot receive"},
+                {"5", ",\"watches\":[null]", "A watched destination is empty"},
+                {"5", ",\"raw\":true,\"expect\":{\"connection\":\"dry-run\",\"destination\":\"Q\"}", "A raw message cannot be verified"},
+                {"5", ",\"destination\":\"${PATH}\"", "Environment variable PATH may not be used"},
+        };
+        for (String[] r : refused) {
+            mvc.perform(body(post("/api/runs"), run1.formatted(r[0], r[1]))).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error", containsString(r[2])));
+        }
+        // a watch on a connection that is not there is a 404, like a target on one
+        mvc.perform(body(post("/api/runs"), run1.formatted("5", ",\"watches\":[{\"connection\":\"nope\",\"destination\":\"W\"}]"))).andExpect(status().isNotFound());
+
+        // a body as typed, with no pack and no template
+        String raw = sent(post("/api/runs"), "{\"raw\":true,\"body\":\"{{uuid}} as typed\",\"headers\":{\"h\":\"{{seq}}\"},\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":1}").get("id").asText();
+        lastRun();
+        mvc.perform(get("/api/messages/" + raw + "/1/0")).andExpect(jsonPath("$.body").value("{{uuid}} as typed")).andExpect(jsonPath("$.headers.h").value("{{seq}}"))
+                .andExpect(jsonPath("$.template").value("raw"));
+    }
+
+    @Test
+    void aScenarioKeepsItsLoadPlanAndADestinationMayNameTheEnvironment() throws Exception {
+        String scenario = """
+                {"name":"Soak","parts":[{"pack":"demo","template":"order.json","weight":1}],"targets":[{"connection":"dry-run","destination":"S.${HOME}"}],
+                 "count":0,"rate":400,"load":{"rampUpSeconds":1,"durationSeconds":1,"senders":2},"invalid":{"percent":10,"kinds":["truncated"]},"seed":99,
+                 "watches":[{"connection":"dry-run","destination":"S.${HOME}","buckets":[{"header":"origin"}]}]}""";
+        JsonNode saved = sent(post("/api/scenarios"), scenario);
+        String id = saved.get("id").asText();
+        assertEquals(1, saved.get("load").get("rampUpSeconds").asInt());
+        assertEquals(99, saved.get("seed").asInt());
+        assertEquals("truncated", saved.get("invalid").get("kinds").get(0).asText());
+        assertEquals("origin", saved.get("watches").get(0).get("buckets").get(0).get("header").asText());
+        String file = Files.readString(dir.resolve("msgforge.json"));
+        assertTrue(file.contains("\"durationSeconds\" : 1") && file.contains("S.${HOME}"), "saved as written: " + file);
+
+        mvc.perform(post("/api/scenarios/" + id + "/run")).andExpect(status().isOk()).andExpect(jsonPath("$.count").value(0)).andExpect(jsonPath("$.durationSeconds").value(1));
+        JsonNode run = lastRun();
+        assertEquals("DONE", run.get("status").asText());
+        assertEquals("S.${HOME}", run.get("targets").get(0).get("destination").asText(), "shown as written, sent to the name it stands for");
+        assertTrue(run.get("sent").asInt() > 100 && run.get("sent").asInt() <= 201, "400 a second reached over the one second it ran: " + run.get("sent"));
+        assertEquals(run.get("sent").asInt(), run.get("watched").get(0).get("count").asInt(), "the watch resolved to the same destination");
+        assertEquals(99, run.get("seed").asInt());
+
+        // what could never run is refused when it is saved
+        mvc.perform(body(put("/api/scenarios/" + id), scenario.replace("\"percent\":10", "\"percent\":-1"))).andExpect(status().isBadRequest());
+        mvc.perform(body(put("/api/scenarios/" + id), scenario.replace("\"header\":\"origin\"", "\"regex\":\"[\""))).andExpect(status().isBadRequest());
+        mvc.perform(body(put("/api/scenarios/" + id), scenario.replace("\"durationSeconds\":1,", ""))).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error", containsString("needs a duration")));
+        mvc.perform(delete("/api/scenarios/" + id)).andExpect(status().isOk());
+    }
+
+    @Test
+    void aMonitorIsStartedResetAndStoppedOverTheApi() throws Exception {
+        JsonNode monitor = sent(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"MON.Q\",\"buckets\":[{\"header\":\"kind\"},{\"pointer\":\"/site\"}]}");
+        String id = monitor.get("id").asText();
+        assertEquals("MON.Q", monitor.get("watch").get("destination").asText());
+        sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"body\":\"{\\\"site\\\":\\\"north-1\\\"}\",\"connection\":\"dry-run\",\"destination\":\"MON.Q\",\"count\":3,"
+                + "\"headers\":{\"kind\":\"late\"}}");
+        lastRun();
+        mvc.perform(get("/api/monitors")).andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(id)).andExpect(jsonPath("$[0].watch.count").value(3))
+                .andExpect(jsonPath("$[0].watch.tables[0].values[0].value").value("late")).andExpect(jsonPath("$[0].watch.tables[1].values[0].value").value("north-1"))
+                .andExpect(jsonPath("$[0].watch.recent[0].bytes").value(18)).andExpect(jsonPath("$[0].watch.samples[0]").value("{\"site\":\"north-1\"}"));
+        // a run that would listen there too is refused while the monitor is on
+        mvc.perform(body(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":1,"
+                + "\"expect\":{\"connection\":\"dry-run\",\"destination\":\"MON.Q\"}}")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error", containsString("A monitor is receiving from Dry run / MON.Q")));
+        mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isOk()).andExpect(jsonPath("$.watch.count").value(0));
+        mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isOk());
+        mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isNotFound());
+        mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/monitors")).andExpect(jsonPath("$.length()").value(0));
+
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"gone\",\"destination\":\"Q\"}")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Old broker is a rabbit (not installed) connection, which cannot receive."));
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\"}")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("Destination is required"));
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"nope\",\"destination\":\"Q\"}")).andExpect(status().isNotFound());
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"Q\",\"buckets\":[{}]}")).andExpect(status().isBadRequest());
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"Q\"}").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void metricsAreNumbersAndNamesAndFollowTheSameHostRules() throws Exception {
+        sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"M.${HOME}\",\"count\":4,"
+                + "\"watches\":[{\"connection\":\"dry-run\",\"destination\":\"M.${HOME}\"}]}");
+        lastRun();
+        String metrics = mvc.perform(get("/metrics")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "text/plain;version=0.0.4;charset=UTF-8"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff")).andReturn().getResponse().getContentAsString();
+        assertTrue(metrics.contains("# TYPE msgforge_messages_sent_total counter\nmsgforge_messages_sent_total "), metrics);
+        assertTrue(metrics.contains("msgforge_runs_total{outcome=\"done\"} ") && metrics.contains("msgforge_runs_active ") && metrics.contains("msgforge_send_rate "), metrics);
+        assertTrue(metrics.contains("msgforge_arrivals_total{connection=\"Dry run\",destination=\"M.${HOME}\",source=\"run\"} 4\n"), "a destination is labelled as it was written: " + metrics);
+        // nothing from the saved file's settings, nothing read from the environment, no message content
+        for (String never : new String[] {"S3CRET-GONE", "TYP0-SECRET", "0LD-KEY-SECRET", "R1GHT-SECRET", "mq1", System.getenv("HOME"), "orderId"}) {
+            assertFalse(metrics.contains(never), never);
+        }
+        mvc.perform(get("/metrics").header("Host", "evil.example")).andExpect(status().isForbidden());
+        mvc.perform(get("/metrics").header("Host", "console.example")).andExpect(status().isOk());
     }
 }

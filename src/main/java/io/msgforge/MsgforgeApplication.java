@@ -26,6 +26,12 @@ public class MsgforgeApplication {
               --url http://host:port   run it on a msgforge that is already running, instead of here (also for list)
               --count <n>              send this many messages instead of the scenario's number
               --rate <r>               messages per second instead of the scenario's rate, 0 for as fast as possible
+              --duration <s>           stop sending after this many seconds (with a count: whichever comes first)
+              --ramp-up <s>            reach the rate in a straight line over this many seconds
+              --senders <n>            send from this many connections at once, 0 to add them as the run falls behind
+              --invalid <percent>      make this share of the messages invalid on purpose
+              --seed <n>               repeat the bodies and faults of the run that printed this seed
+              --save <folder>          also write the run's report there as HTML, JSON and CSV
 
             Settings are environment variables (or --name=value arguments, shown in brackets). run and list
             read the same ones as the console, except PORT and SERVER_ADDRESS: they open no port.
@@ -37,6 +43,8 @@ public class MsgforgeApplication {
               MSGFORGE_PLUGINS        folder of plugin jars, plugins                      [--msgforge.plugins]
               MSGFORGE_ALLOWED_HOSTS  host names it answers to besides localhost          [--msgforge.allowed-hosts]
               MSGFORGE_ENV_ALLOW      variables a connection may name besides MSGFORGE_*  [--msgforge.env-allow]
+              MSGFORGE_REPORTS        folder every finished run's report is saved in, none [--msgforge.reports]
+              MSGFORGE_REPORTS_KEEP   how many runs that folder keeps, 50                 [--msgforge.reports-keep]
 
             The README next to this program explains each of them.
             """;
