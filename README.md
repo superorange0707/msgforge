@@ -57,7 +57,7 @@ The console has no login. It listens on 127.0.0.1 only, and it answers only requ
 | A run's numbers, chart and reports | click the run's name |
 | Saved reports | the archive button at the bottom of the sidebar |
 
-Connections and scenarios are saved to `msgforge.json`, packs to the `packs/` folder. Both are plain files you can copy to another machine.
+Connections, scenarios and saved monitors are kept in `msgforge.json`, packs in the `packs/` folder. Both are plain files you can copy to another machine.
 
 ## Templates
 
@@ -269,7 +269,7 @@ The console keeps the last 20 runs that have ended, and every run that is still 
 
 A run can ramp up to its rate, run for a time instead of a count, send from several connections at once, and go on until it is stopped. A send that fails no longer ends it: the failure is counted with its error and the run goes on, until the connection is plainly gone (100 sends in a row failed, or every send failed for 10 seconds, or nothing went out at all). While it runs, and afterwards, clicking its name shows the target and actual rate, sent, failed and invalid counts, the send times (p50, p95, p99) and a chart over time.
 
-A share of the messages can be made invalid on purpose (empty, garbage, cut off, a field removed, a value of the wrong type), with a seed that makes the run repeatable. A run that verifies knows the difference: invalid messages are expected on the destination you name for them, or nowhere, and the result says how many were rejected as expected, accepted although invalid, or valid but rejected. Further destinations can be watched and what arrives there sorted into buckets by a JSON pointer, a regular expression or a header; a monitor does the same outside a run.
+A share of the messages can be made invalid on purpose (empty, garbage, cut off, a field removed, a value of the wrong type), with a seed that makes the run repeatable. A run that verifies knows the difference: invalid messages are expected on the destination you name for them, or nowhere, and the result says how many were rejected as expected, accepted although invalid, or valid but rejected. Further destinations can be watched and what arrives there sorted into buckets by a JSON pointer, a regular expression or a header; a monitor does the same outside a run, can be saved so that it starts with msgforge, and shares its subscription with a run that listens on the same queue, so both see every message.
 
 Every run can be downloaded as HTML, JSON and CSV, saved to a folder automatically, and `GET /metrics` gives Prometheus the totals. [docs/load.md](docs/load.md) has all of it: the settings, the rules, the limits, a complete scenario, and what was tested and what was not.
 
@@ -378,7 +378,7 @@ To verify arrivals, add `"expect":{"connection":"…","destination":"…"}` to t
 A load run adds `"load":{"rampUpSeconds":…,"durationSeconds":…,"senders":…,"unlimited":…}`, `"invalid":{"percent":…,"kinds":[…],"expect":{…}}`, `"seed"`, `"watches":[{"connection":"…","destination":"…","buckets":[{"pointer":"/reason"}]}]` and `"raw":true`; `count` may then be 0. Each run in the list carries `failed`, `invalid`, `targetRate`, `actualRate`, `elapsedMs`, `latency`, `errors`, `seed` and `watched`, and a check also has `invalid`, `rejected` and `accepted`. [docs/load.md](docs/load.md) explains them.
 
 Runs: `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}` (one run with its series over time and watched destinations), `GET /api/runs/{id}/report?format=html|json|csv|series`, `DELETE /api/runs/{id}` (cancels, also while verifying).
-Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `DELETE /api/monitors/{id}`.
+Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (keep it in `msgforge.json`, or not), `DELETE /api/monitors/{id}`.
 Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.

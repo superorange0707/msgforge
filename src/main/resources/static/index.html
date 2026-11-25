@@ -257,8 +257,12 @@
       <span>Bucket by</span>
       <div class="chiprow" id="mBuckets"><input id="mBucketInput" placeholder="/reason, header:name or a regular expression, then Enter" autocomplete="off" aria-label="Add a bucket"></div>
     </div>
+    <label class="field"><span>Name</span><input id="mName" maxlength="80" autocomplete="off" placeholder="Rejected"></label>
     <p class="note">Receiving takes the messages off a queue.</p>
-    <div class="mfoot"><span class="grow"></span><button class="btn primary" data-icon="eye">Start</button></div>
+    <div class="mfoot">
+      <button type="button" class="btn hold" id="mSave" aria-pressed="false" title="Keep it in msgforge.json: it then starts with msgforge">Saved</button>
+      <span class="grow"></span><button class="btn primary" data-icon="eye">Start</button>
+    </div>
   </form>
 </dialog>
 

@@ -240,6 +240,7 @@ dialog.wide { width: min(1060px, calc(100vw - 32px)); max-height: min(860px, cal
 .mhead { gap: 10px; }
 .mhead h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mhead .acts { display: flex; gap: 6px; }
+.mhead .acts .btn.hold { min-height: 28px; }
 .mhead .acts .btn { height: 28px; padding: 0 10px; font-size: 12px; text-decoration: none; color: inherit; }
 .dbody { display: grid; gap: 14px; align-content: start; padding: 18px 22px 22px; overflow: auto; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; }

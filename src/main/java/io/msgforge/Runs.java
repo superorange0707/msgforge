@@ -30,7 +30,6 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.random.RandomGenerator;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PreDestroy;
@@ -244,6 +243,8 @@ public class Runs {
         final List<TargetView> watches;
         final List<String> watchDestinations;   // resolved, like destinations
         final List<Observer> observers;         // one per watch
+        final List<String> watchKeys = new ArrayList<>();   // connection and resolved destination, one per watch
+        final java.util.Set<String> expecting = new java.util.HashSet<>();   // the keys of the watches this run expects arrivals on
         final int invalidWatch;                 // where invalid messages should arrive, -1 for nowhere
         final boolean verifying;
         final double faultPercent;
@@ -316,6 +317,9 @@ public class Runs {
             this.totalWeight = parts.stream().mapToInt(Loaded::weight).sum();
             this.owed = plan.rampSeconds() > 0 ? 0 : 1;   // the first message goes at once, unless the rate starts from nothing
             if (faultKinds != null) faultKinds.forEach(kind -> faults.put(kind, new AtomicLong()));
+            for (int i = 0; i < watches.size(); i++) watchKeys.add(watches.get(i).connectionId() + "\n" + watchDestinations.get(i));
+            for (Loaded part : parts) if (part.watch() >= 0) expecting.add(watchKeys.get(part.watch()));
+            if (invalidWatch >= 0) expecting.add(watchKeys.get(invalidWatch));
         }
 
         long elapsed() {
@@ -551,7 +555,6 @@ public class Runs {
     private final Packs packs;
     private final TemplateEngine engine;
     private final Connections connections;
-    private final Monitors monitors;
     private final Totals totals = new Totals();
     private final List<Consumer<Detail>> finishedListeners = new CopyOnWriteArrayList<>();
     private final Deque<Run> runs = new ArrayDeque<>();
@@ -566,16 +569,9 @@ public class Runs {
     });
 
     public Runs(Packs packs, TemplateEngine engine, Connections connections) {
-        this(packs, engine, connections, new Monitors(connections));
-    }
-
-    @Autowired
-    public Runs(Packs packs, TemplateEngine engine, Connections connections, Monitors monitors) {
         this.packs = packs;
         this.engine = engine;
         this.connections = connections;
-        this.monitors = monitors;
-        monitors.runReceiving = this::receiving;
     }
 
     public Totals totals() {
@@ -731,13 +727,7 @@ public class Runs {
         List<Observer> observers = new ArrayList<>();
         List<String> watchDestinations = new ArrayList<>();
         for (TargetView w : watches) {
-            String resolved = connections.resolve(w.destination());
-            // Receiving takes messages off a queue: a monitor on the same one would get some of this run's.
-            if (monitors.listening(w.connectionId(), resolved) != null) {
-                throw new IllegalArgumentException("A monitor is receiving from " + w.connection() + " / " + w.destination()
-                        + ", and would take some of this run's messages. Stop the monitor first; the run can watch the destination itself.");
-            }
-            watchDestinations.add(resolved);
+            watchDestinations.add(connections.resolve(w.destination()));
             observers.add(new Observer(w.connection(), w.destination(), buckets.get(w)));
         }
 
@@ -759,6 +749,19 @@ public class Runs {
                 List.copyOf(watches), List.copyOf(watchDestinations), List.copyOf(observers), invalidWatch, verifying,
                 faultKinds == null ? 0 : req.invalid().percent(), faultKinds, seed, match, timeout);
         synchronized (runs) {
+            // A run shares a destination's subscription with monitors and with runs that only watch it. Two runs that
+            // both expect arrivals there are another matter: each would see the other's messages arrive, and a match
+            // expression that is not unique across runs (a counter, say) would take one for its own.
+            for (Run other : runs) {
+                if (other.finishedAt != null) continue;
+                for (String where : run.expecting) {
+                    if (other.expecting.contains(where)) {
+                        TargetView w = run.watches.get(run.watchKeys.indexOf(where));
+                        throw new IllegalArgumentException("The run " + other.label + " is waiting for arrivals on " + w.connection() + " / " + w.destination()
+                                + ". Two runs that expect arrivals on one destination could take each other's messages for their own: wait for it to end, or expect on another destination.");
+                    }
+                }
+            }
             runs.addFirst(run);
             // Only runs that have ended make room. One still going stays listed however old, or it could not be cancelled.
             int ended = 0;
@@ -782,19 +785,6 @@ public class Runs {
         if (at >= 0) return at;
         watches.add(where);
         return watches.size() - 1;
-    }
-
-    /** The label of a run that is receiving from this destination now, or null. Monitors ask before they listen. */
-    private String receiving(String connectionId, String resolved) {
-        synchronized (runs) {
-            for (Run r : runs) {
-                if (r.finishedAt != null) continue;
-                for (int i = 0; i < r.watches.size(); i++) {
-                    if (r.watches.get(i).connectionId().equals(connectionId) && r.watchDestinations.get(i).equals(resolved)) return r.label;
-                }
-            }
-        }
-        return null;
     }
 
     /** Renders the body first, then the headers and the match expression, through one message so they can share values. */
@@ -895,7 +885,8 @@ public class Runs {
                 int watch = i;
                 TargetView w = run.watches.get(i);
                 try {
-                    subscriptions.add(connections.receive(w.connectionId(), run.watchDestinations.get(i), arrival -> run.arrived(watch, arrival), error -> {
+                    // shared with whoever else listens there: a monitor on the same reject queue goes on seeing every arrival
+                    subscriptions.add(connections.share(w.connectionId(), run.watchDestinations.get(i), arrival -> run.arrived(watch, arrival), error -> {
                         run.broken = "Receiving from " + w.connection() + " / " + w.destination() + " failed: " + error;
                         wake(run);
                     }));

@@ -265,6 +265,19 @@ public class Api {
         return monitors.reset(id);
     }
 
+    /** Keeps the monitor in the configuration file: it then starts with the console. */
+    @PutMapping("/monitors/{id}/saved")
+    public Monitors.View saveMonitor(@PathVariable String id) {
+        return monitors.save(id);
+    }
+
+    /** Takes it out of the file again. It goes on watching. */
+    @DeleteMapping("/monitors/{id}/saved")
+    public Monitors.View forgetMonitor(@PathVariable String id) {
+        return monitors.forget(id);
+    }
+
+    /** Stops it, and removes it from the configuration file if it was saved. */
     @DeleteMapping("/monitors/{id}")
     public void stopMonitor(@PathVariable String id) {
         monitors.stop(id);

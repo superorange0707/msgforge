@@ -563,55 +563,280 @@ class LoadTest {
     }
 
     @Test
-    void aMonitorWatchesADestinationOutsideARunAndNeverCompetesWithOne(@TempDir Path dir) throws Exception {
-        DryRunType dry = new DryRunType();
-        Sink sink = new Sink();
-        Connections store = store(dir, dry, sink);
+    void aMonitorAndARunOnOneDestinationShareItsSubscription(@TempDir Path dir) throws Exception {
+        // A queue: each message goes to one consumer only, in turn. Two consumers would each get half.
+        Map<String, List<Consumer<TransportType.Arrival>>> consumers = new ConcurrentHashMap<>();
+        AtomicInteger opened = new AtomicInteger(), closed = new AtomicInteger(), turn = new AtomicInteger();
+        TransportType queue = new TransportType() {
+            public String id() { return "queue"; }
+            public String label() { return "Queue"; }
+            public List<Field> fields() { return List.of(); }
+            public Sender open(Map<String, String> settings) {
+                return (destination, body, headers) -> {
+                    List<Consumer<Arrival>> on = consumers.getOrDefault(destination, List.of());
+                    if (!on.isEmpty()) on.get(turn.getAndIncrement() % on.size()).accept(new Arrival(body, headers, null));
+                };
+            }
+            public boolean canReceive() { return true; }
+            public Subscription receive(Map<String, String> settings, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) {
+                opened.incrementAndGet();
+                consumers.computeIfAbsent(destination, d -> new CopyOnWriteArrayList<>()).add(onArrival);
+                return () -> {
+                    closed.incrementAndGet();
+                    consumers.get(destination).remove(onArrival);
+                };
+            }
+        };
+        Connections store = store(dir, queue);
+        String id = only(store);
         Monitors monitors = new Monitors(store);
-        Runs runs = new Runs(packs, engine, store, monitors);
-        TransportType.Sender out = dry.open(Map.of());
+        Runs runs = new Runs(packs, engine, store);
+        Runs.Target rejects = new Runs.Target(id, "REJECTS");
+        Function<Integer, Runs.Request> loop = count -> new Runs.Request("loop", null, null, null, count, 0, null, "demo", "order.json", null, null, id, "REJECTS", rejects, 5, null);
 
-        Monitors.View started = monitors.start(new Monitors.Request("dry-run", " ORDERS.REJECTED ", List.of(new Observer.Bucket(null, "/reason", null, null))));
-        assertEquals("ORDERS.REJECTED", started.watch().destination());
-        for (String reason : List.of("no-id", "no-id", "bad-items")) out.send("ORDERS.REJECTED", "{\"reason\":\"" + reason + "\"}", Map.of());
-        Monitors.View view = monitors.list().get(0);
-        assertEquals(3, view.watch().count());
-        assertEquals(List.of(new Observer.Count("no-id", 2), new Observer.Count("bad-items", 1)), view.watch().tables().get(0).values());
-        assertNull(view.error());
+        Monitors.View monitor = monitors.start(new Monitors.Request("Rejected", id, " REJECTS ", List.of(new Observer.Bucket(null, "/currency", null, null)), null));
+        assertEquals("up", monitor.state());
+        assertEquals("Rejected", monitor.name());
+        assertEquals("REJECTS", monitor.watch().destination());
+        assertEquals(1, opened.get());
 
-        // a run that would listen to the same destination is refused, and so is a second monitor
-        String why = assertThrows(IllegalArgumentException.class, () -> runs.start(ordersRun(5, new Faults.Spec(50, null, REJECTED), 1, null))).getMessage();
-        assertTrue(why.startsWith("A monitor is receiving from Dry run / ORDERS.REJECTED"), why);
-        assertEquals("A monitor is already on Dry run / ORDERS.REJECTED",
-                assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request("dry-run", "ORDERS.REJECTED", null))).getMessage());
-        assertTrue(runs.list().isEmpty());
+        // the run joins the monitor's subscription: the queue has one consumer, and both see all 40 arrivals
+        Runs.View run = finished(runs, runs.start(loop.apply(40)).id());
+        assertEquals("PASS", run.verdict(), run.checks().toString());
+        assertEquals(40, run.checks().get(0).arrived());
+        assertEquals(40, monitors.list().get(0).watch().count());
+        assertEquals(40, monitors.list().get(0).watch().tables().get(0).values().stream().mapToLong(Observer.Count::count).sum());
+        assertEquals(1, opened.get(), "one subscription for the two of them");
+        assertEquals(0, closed.get(), "and the run did not close it when it ended: the monitor is still listening");
+        assertEquals(1, consumers.get("REJECTS").size());
 
-        assertEquals(0, monitors.reset(view.id()).watch().count());
-        out.send("ORDERS.REJECTED", "{}", Map.of());
-        assertEquals(1, monitors.list().get(0).watch().count());
-        monitors.stop(view.id());
-        assertTrue(monitors.list().isEmpty());
-        out.send("ORDERS.REJECTED", "{}", Map.of());   // nobody is listening any more
-        assertThrows(java.util.NoSuchElementException.class, () -> monitors.stop(view.id()));
-
-        // the other way round: while a run is receiving from a destination, a monitor on it is refused
-        String waiting = runs.start(new Runs.Request("waits", null, null, null, 2, 0, null, "demo", "order.json", null, null, "dry-run", "NOWHERE", OUT, 30, null)).id();
+        // a monitor that is stopped while a run waits does not cut the run off
+        String waiting = runs.start(new Runs.Request("waits", null, null, null, 2, 0, null, "demo", "order.json", null, null, id, "ELSEWHERE", rejects, 30, null)).id();
         for (int i = 0; i < 250 && runs.list().get(0).status() != Runs.Status.VERIFYING; i++) Thread.sleep(20);
-        why = assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request("dry-run", "ORDERS.OUT", null))).getMessage();
-        assertTrue(why.startsWith("The run waits is receiving from Dry run / ORDERS.OUT"), why);
+        monitors.stop(monitor.id());
+        assertTrue(monitors.list().isEmpty());
+        assertEquals(0, closed.get(), "the run still holds the subscription");
+        // a second run that expects arrivals there too is refused: each would see the other's messages arrive
+        String why = assertThrows(IllegalArgumentException.class, () -> runs.start(loop.apply(5))).getMessage();
+        assertTrue(why.startsWith("The run waits is waiting for arrivals on Queue / REJECTS. Two runs that expect arrivals on one destination"), why);
+        // one that only watches it is not: it joins, and so does a new monitor
+        Runs.View watching = finished(runs, runs.start(new Runs.Request("watches", null, null, null, 3, 0, null, "demo", "order.json", null, null, id, "REJECTS", null, null, null,
+                null, null, null, List.of(new Runs.Watch(id, "REJECTS", null)), null)).id());
+        assertEquals(3, watching.watched().get(0).count());
+        Monitors.View again = monitors.start(new Monitors.Request(id, "REJECTS", null));
+        assertEquals(1, opened.get());
         runs.cancel(waiting);
         finished(runs, waiting);
-        monitors.stop(monitors.start(new Monitors.Request("dry-run", "ORDERS.OUT", null)).id());
+        assertEquals(0, closed.get(), "now the monitor holds it");
+        monitors.stop(again.id());
+        assertEquals(1, closed.get(), "the last listener to leave closes it");
+        assertTrue(consumers.get("REJECTS").isEmpty());
+        // and the next one to listen opens a new one
+        assertEquals("PASS", finished(runs, runs.start(loop.apply(4)).id()).verdict());
+        assertEquals(2, opened.get());
+        assertEquals(2, closed.get());
 
-        // what cannot work is refused when it is asked for
-        assertTrue(assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request(only(store), "Q", null))).getMessage().contains("cannot receive"));
-        assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request("dry-run", " ", null)));
-        assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request("dry-run", "Q", List.of(new Observer.Bucket(null, null, "(", null)))));
-        assertThrows(java.util.NoSuchElementException.class, () -> monitors.start(new Monitors.Request("nope", "Q", null)));
-        for (int i = 0; i < Monitors.MAX; i++) monitors.start(new Monitors.Request("dry-run", "Q" + i, null));
-        assertEquals("At most 10 monitors. Stop one first.", assertThrows(IllegalArgumentException.class, () -> monitors.start(new Monitors.Request("dry-run", "ONE.MORE", null))).getMessage());
+        // reset, a second monitor on the same destination, and what cannot work
+        DryRunType dry = new DryRunType();
+        Connections loopback = store(Files.createDirectory(dir.resolve("dry")), dry, new Sink());
+        Monitors more = new Monitors(loopback);
+        Monitors.View view = more.start(new Monitors.Request("dry-run", "ORDERS.REJECTED", null));
+        dry.open(Map.of()).send("ORDERS.REJECTED", "{}", Map.of());
+        assertEquals(1, more.list().get(0).watch().count());
+        assertEquals(0, more.reset(view.id()).watch().count());
+        assertEquals("A monitor is already on Dry run / ORDERS.REJECTED",
+                assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("dry-run", "ORDERS.REJECTED", null))).getMessage());
+        assertEquals("There is no configuration file to save a monitor in", assertThrows(IllegalArgumentException.class, () -> more.save(view.id())).getMessage());
+        more.stop(view.id());
+        assertThrows(java.util.NoSuchElementException.class, () -> more.stop(view.id()));
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request(only(loopback), "Q", null))).getMessage().contains("cannot receive"));
+        assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("dry-run", " ", null)));
+        assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("dry-run", "Q", List.of(new Observer.Bucket(null, null, "(", null)))));
+        assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("x".repeat(81), "dry-run", "Q", null, null)));
+        assertThrows(java.util.NoSuchElementException.class, () -> more.start(new Monitors.Request("nope", "Q", null)));
+        for (int i = 0; i < Monitors.MAX; i++) more.start(new Monitors.Request("dry-run", "Q" + i, null));
+        assertEquals("At most 10 monitors. Stop one first.", assertThrows(IllegalArgumentException.class, () -> more.start(new Monitors.Request("dry-run", "ONE.MORE", null))).getMessage());
+        more.stopAll();
+        assertTrue(more.list().isEmpty());
+    }
+
+    private static Monitors.View monitor(Monitors monitors, String id, String state) throws InterruptedException {
+        for (int i = 0; i < 500; i++) {
+            Monitors.View m = monitors.list().stream().filter(v -> v.id().equals(id)).findFirst().orElseThrow();
+            if (m.state().equals(state)) return m;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("monitor " + id + " is " + monitors.list().stream().filter(v -> v.id().equals(id)).findFirst().orElseThrow() + ", not " + state);
+    }
+
+    @Test
+    void savedMonitorsStartWithTheConsoleAndOneThatIsDownTriesAgain(@TempDir Path dir) throws Exception {
+        // A broker that can be switched off: while it is down, subscribing fails; and it can break a subscription that is open.
+        java.util.concurrent.atomic.AtomicBoolean down = new java.util.concurrent.atomic.AtomicBoolean(true);
+        AtomicInteger attempts = new AtomicInteger();
+        List<Consumer<Exception>> breakers = new CopyOnWriteArrayList<>();
+        List<Consumer<TransportType.Arrival>> listeners = new CopyOnWriteArrayList<>();
+        TransportType broker = new TransportType() {
+            public String id() { return "broker"; }
+            public String label() { return "Broker"; }
+            public List<Field> fields() { return List.of(new Field("password", "Password", "", false, true)); }
+            public Sender open(Map<String, String> settings) { return (destination, body, headers) -> { }; }
+            public boolean canReceive() { return true; }
+            public Subscription receive(Map<String, String> settings, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) {
+                attempts.incrementAndGet();
+                if (down.get()) throw new IllegalStateException("connection refused (login s3cret)");
+                breakers.add(onError);
+                listeners.add(onArrival);
+                return () -> listeners.remove(onArrival);
+            }
+        };
+        Path file = dir.resolve("msgforge.json");
+        Files.writeString(file, """
+                {"connections":[{"id":"dry-run","name":"Dry run","type":"dry-run","settings":{},"destinations":[]},
+                                {"id":"b","name":"Broker","type":"broker","settings":{"password":"s3cret"},"destinations":[]}],
+                 "monitors":[
+                  {"id":"rejects","name":"Rejected","connection":"dry-run","destination":"REJECTS.${HOME}","buckets":[{"pointer":"/reason"}]},
+                  {"id":"remote","connection":"b","destination":"ORDERS.DEAD"},
+                  {"name":"No such connection","connection":"gone","destination":"Q"},
+                  {"id":"typo","connection":"dry-run","destination":"Q","buckets":[{"regex":"("}]},
+                  {"id":"blank","connection":"dry-run"},
+                  {"id":"secret","connection":"dry-run","destination":"${PATH}"},
+                  null]}""");
+        DryRunType dry = new DryRunType();
+        ConfigStore config = new ConfigStore(file.toString(), new ObjectMapper());
+        Connections store = new Connections(config, List.of(dry, broker), new String[] {"HOME"});
+        Monitors monitors = new Monitors(store, config);
+        monitors.retryUnitMillis = 20;   // the waits of 5, 10, 20, 40 and 60 seconds, as so many fiftieths of one
+
+        // Loaded and listed before anything is tried; nothing listens until the console is up.
+        assertEquals(List.of("starting", "starting", "starting", "down", "down", "starting"), monitors.list().stream().map(Monitors.View::state).toList());
+        assertTrue(monitors.list().stream().allMatch(Monitors.View::saved));
+        monitors.startSaved();
+
+        // the one on a broker that answers is up, with its name, its buckets and its destination as written
+        Monitors.View rejects = monitor(monitors, "rejects", "up");
+        assertEquals("Rejected", rejects.name());
+        assertEquals("REJECTS.${HOME}", rejects.watch().destination());
+        dry.open(Map.of()).send("REJECTS." + System.getenv("HOME"), "{\"reason\":\"empty\"}", Map.of());
+        assertEquals(List.of(new Observer.Count("empty", 1)), monitors.list().get(0).watch().tables().get(0).values());
+
+        // the one whose broker is down is listed as down with the reason (and no secret in it), and tries again
+        Monitors.View remote = monitor(monitors, "remote", "down");
+        assertEquals("Cannot receive: connection refused (login ***)", remote.error());
+        assertTrue(remote.retryAt() != null);
+        for (int i = 0; i < 250 && attempts.get() < 3; i++) Thread.sleep(20);
+        assertTrue(attempts.get() >= 3, "5 and 10 units after the first: " + attempts.get());
+        down.set(false);
+        remote = monitor(monitors, "remote", "up");
+        assertNull(remote.error());
+        assertNull(remote.retryAt());
+        listeners.get(0).accept(new TransportType.Arrival("x", null, null));
+        assertEquals(1, monitor(monitors, "remote", "up").watch().count());
+        // receiving breaks later: down again, what it counted stays, and it comes back by itself
+        int before = attempts.get();
+        breakers.get(0).accept(new IllegalStateException("the broker closed the connection"));
+        assertEquals(1, monitors.list().get(1).watch().count());
+        for (int i = 0; i < 250 && attempts.get() == before; i++) Thread.sleep(20);
+        remote = monitor(monitors, "remote", "up");
+        assertEquals(1, remote.watch().count());
+        assertEquals(1, listeners.size(), "the broken subscription was closed, the new one listens");
+
+        // the others say what is wrong with them: a connection that is not there (it may yet be added), and entries only an edit can mend
+        Monitors.View gone = monitors.list().get(2);
+        assertEquals("No such connection", gone.name());
+        assertEquals("down", monitor(monitors, gone.id(), "down").state());
+        assertEquals("Cannot receive: no connection gone", monitors.list().get(2).error());
+        assertTrue(monitors.list().get(3).error().startsWith("The bucket expression ( is not a regular expression"), monitors.list().get(3).error());
+        assertNull(monitors.list().get(3).retryAt(), "trying again would not mend a bucket");
+        assertEquals("This saved monitor names no destination", monitors.list().get(4).error());
+        assertTrue(monitor(monitors, "secret", "down").error().startsWith("Cannot receive: Environment variable PATH may not be used"));
+
+        // ---- saving from the console: a monitor started by hand is kept in the file, forgotten again, and removed when stopped
+        Monitors.View byHand = monitors.start(new Monitors.Request("By hand", "dry-run", "ORDERS.DEAD", List.of(new Observer.Bucket("why", null, null, "reason")), null));
+        assertFalse(byHand.saved());
+        assertFalse(Files.readString(file).contains("By hand"));
+        assertTrue(monitors.save(byHand.id()).saved());
+        JsonNode saved = json.readTree(file.toFile()).get("monitors");
+        assertEquals(7, saved.size());
+        assertEquals("{\"id\":\"" + byHand.id() + "\",\"name\":\"By hand\",\"connection\":\"dry-run\",\"destination\":\"ORDERS.DEAD\","
+                + "\"buckets\":[{\"name\":\"why\",\"pointer\":null,\"regex\":null,\"header\":\"reason\"}]}", saved.get(6).toString());
+        assertEquals("REJECTS.${HOME}", saved.get(0).get("destination").asText(), "as written, not as resolved");
+        assertEquals("s3cret", json.readTree(file.toFile()).get("connections").get(1).get("settings").get("password").asText(), "the rest of the file is as it was");
+        assertFalse(monitors.forget(byHand.id()).saved());
+        assertEquals(6, json.readTree(file.toFile()).get("monitors").size());
+        assertEquals(7, monitors.list().size(), "forgotten, it goes on watching");
+        monitors.save(byHand.id());
+        monitors.stop(byHand.id());
+        monitors.stop("typo");
+        assertEquals(List.of("rejects", "remote", gone.id(), "blank", "secret"), monitors.list().stream().map(Monitors.View::id).toList());
+        assertEquals(5, json.readTree(file.toFile()).get("monitors").size(), "stopping a saved monitor takes it out of the file");
+        // saved at once when asked to be
+        Monitors.View kept = monitors.start(new Monitors.Request(null, "dry-run", "KEPT", null, true));
+        assertTrue(kept.saved() && Files.readString(file).contains("\"KEPT\""));
         monitors.stopAll();
-        assertTrue(monitors.list().isEmpty());
+
+        // the file as it now is starts the same monitors again; one without a monitors section starts none
+        ConfigStore again = new ConfigStore(file.toString(), new ObjectMapper());
+        Monitors restarted = new Monitors(new Connections(again, List.of(dry, broker), new String[] {"HOME"}), again);
+        assertEquals(List.of("rejects", "remote", gone.id(), "blank", "secret", kept.id()), restarted.list().stream().map(Monitors.View::id).toList());
+        restarted.stopAll();
+        ConfigStore empty = new ConfigStore(dir.resolve("none.json").toString(), new ObjectMapper());
+        assertTrue(new Monitors(new Connections(empty, List.of(dry)), empty).list().isEmpty());
+    }
+
+    @Test
+    void aSharedSubscriptionTellsEveryListenerWhenItBreaksAndTheNextOneOpensAnother(@TempDir Path dir) throws Exception {
+        AtomicInteger opened = new AtomicInteger(), closed = new AtomicInteger();
+        List<Consumer<Exception>> breakers = new CopyOnWriteArrayList<>();
+        List<Consumer<TransportType.Arrival>> receivers = new CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicBoolean refuse = new java.util.concurrent.atomic.AtomicBoolean();
+        TransportType type = new TransportType() {
+            public String id() { return "t"; }
+            public String label() { return "T"; }
+            public List<Field> fields() { return List.of(); }
+            public Sender open(Map<String, String> settings) { return (destination, body, headers) -> { }; }
+            public boolean canReceive() { return true; }
+            public Subscription receive(Map<String, String> settings, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) {
+                if (refuse.get()) throw new IllegalStateException("refused");
+                opened.incrementAndGet();
+                breakers.add(onError);
+                receivers.add(onArrival);
+                return closed::incrementAndGet;
+            }
+        };
+        Connections store = store(dir, type);
+        String id = only(store);
+        List<String> a = new CopyOnWriteArrayList<>(), b = new CopyOnWriteArrayList<>(), errors = new CopyOnWriteArrayList<>();
+        TransportType.Subscription first = store.share(id, "Q", arrival -> a.add(arrival.body()), e -> errors.add("a: " + e));
+        TransportType.Subscription second = store.share(id, "Q", arrival -> { b.add(arrival.body()); throw new IllegalStateException("b cannot cope"); }, e -> errors.add("b: " + e));
+        TransportType.Subscription other = store.share(id, "OTHER", arrival -> { }, e -> { });
+        assertEquals(2, opened.get(), "one for Q, one for OTHER");
+        receivers.get(0).accept(new TransportType.Arrival("m1", null, null));
+        receivers.get(0).accept(new TransportType.Arrival("m2", null, null));
+        assertEquals(List.of("m1", "m2"), a, "one listener's trouble with an arrival is not the other's");
+        assertEquals(List.of("m1", "m2"), b);
+
+        breakers.get(0).accept(new IllegalStateException("session closed"));
+        assertEquals(List.of("a: session closed", "b: session closed"), errors);
+        // it takes no new listeners: the next one opens another, while the two on the broken one still hold it
+        TransportType.Subscription third = store.share(id, "Q", arrival -> { }, e -> { });
+        assertEquals(3, opened.get());
+        first.close();
+        first.close();
+        assertEquals(0, closed.get());
+        second.close();
+        assertEquals(1, closed.get(), "the broken one is closed when its last listener has left, and once");
+        third.close();
+        other.close();
+        assertEquals(3, closed.get());
+
+        // one that cannot be opened is the caller's error, and leaves nothing behind for the next to join
+        refuse.set(true);
+        assertEquals("refused", assertThrows(IllegalStateException.class, () -> store.share(id, "Q", arrival -> { }, e -> { })).getMessage());
+        refuse.set(false);
+        store.share(id, "Q", arrival -> { }, e -> { }).close();
+        assertEquals(4, opened.get());
+        assertEquals(4, closed.get());
     }
 
     // ---- raw, and names from the environment
@@ -728,7 +953,7 @@ class LoadTest {
         Sink sink = new Sink();
         Connections store = store(dir, dry, sink);
         Monitors monitors = new Monitors(store);
-        Runs runs = new Runs(packs, engine, store, monitors);
+        Runs runs = new Runs(packs, engine, store);
         Path folder = dir.resolve("reports");
         Reports reports = new Reports(runs, json, folder.toString(), 2);
         Files.createDirectories(folder);

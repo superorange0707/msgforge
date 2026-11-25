@@ -57,7 +57,9 @@ class ApiTest {
                   {"id":"typo","name":"Hand written","type":"ibm-mq","destinations":["Q"],
                    "settings":{"hosts":"mq1","channel":"C","pasword":"TYP0-SECRET","sslPassword":"0LD-KEY-SECRET","password":"R1GHT-SECRET"}},
                   {"type":"dry-run"}],
-                 "scenarios":[{"name":"Bare"}]}""");
+                 "scenarios":[{"name":"Bare"}],
+                 "monitors":[{"id":"always","name":"Rejected","connection":"dry-run","destination":"ALWAYS.REJECTED","buckets":[{"pointer":"/reason"}]},
+                             {"id":"orphan","connection":"gone","destination":"Q"}]}""");
         // Packs with something wrong: a pack.yml that does not parse, a template that is not UTF-8, a file where a folder belongs.
         Files.createDirectories(dir.resolve("packs/broken/templates"));
         Files.writeString(dir.resolve("packs/broken/pack.yml"), "name: [unclosed");
@@ -575,33 +577,99 @@ class ApiTest {
         mvc.perform(delete("/api/scenarios/" + id)).andExpect(status().isOk());
     }
 
+    private JsonNode monitor(String id) throws Exception {
+        for (JsonNode m : json.readTree(mvc.perform(get("/api/monitors")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString())) {
+            if (m.get("id").asText().equals(id)) return m;
+        }
+        return null;
+    }
+
     @Test
-    void aMonitorIsStartedResetAndStoppedOverTheApi() throws Exception {
-        JsonNode monitor = sent(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"MON.Q\",\"buckets\":[{\"header\":\"kind\"},{\"pointer\":\"/site\"}]}");
+    void savedMonitorsStartWithTheApplicationAndShareADestinationWithARun() throws Exception {
+        // from the file: one that listens, and one whose connection cannot receive, which is listed as down and did not stop the start
+        JsonNode always = null;
+        for (int i = 0; i < 250 && (always == null || !always.get("state").asText().equals("up")); i++) {
+            Thread.sleep(20);
+            always = monitor("always");
+        }
+        assertEquals("up", always.get("state").asText());
+        assertEquals("Rejected", always.get("name").asText());
+        assertTrue(always.get("saved").asBoolean());
+        JsonNode orphan = monitor("orphan");
+        for (int i = 0; i < 250 && !orphan.get("state").asText().equals("down"); i++) {
+            Thread.sleep(20);
+            orphan = monitor("orphan");
+        }
+        assertEquals("Cannot receive: Old broker is a rabbit (not installed) connection, which cannot receive.", orphan.get("error").asText());
+        assertFalse(orphan.get("retryAt").isNull());
+
+        // a run that expects its invalid messages on the monitored destination is not refused: both see every reject
+        long before = always.get("watch").get("count").asLong();
+        sent(post("/api/connections"), "{\"name\":\"Routed\",\"type\":\"dry-run\",\"settings\":{\"route\":\"SHARED.IN > SHARED.OUT, invalid > ALWAYS.REJECTED\"}}");
+        String routed = null;
+        for (JsonNode c : json.readTree(connections())) if (c.get("name").asText().equals("Routed")) routed = c.get("id").asText();
+        sent(post("/api/runs"), """
+                {"pack":"demo","template":"order.json","connection":"%s","destination":"SHARED.IN","count":60,"seed":8,"timeoutSeconds":5,
+                 "expect":{"connection":"dry-run","destination":"SHARED.OUT"},
+                 "invalid":{"percent":40,"kinds":["empty","truncated"],"expect":{"connection":"dry-run","destination":"ALWAYS.REJECTED"}}}""".formatted(routed));
+        JsonNode run = lastRun();
+        assertEquals("PASS", run.get("verdict").asText(), run.toString());
+        int rejected = run.get("checks").get(1).get("arrived").asInt();
+        assertTrue(rejected > 10, run.toString());
+        always = monitor("always");
+        assertEquals(before + rejected, always.get("watch").get("count").asLong(), "the monitor counted the rejects the run was matching");
+        assertEquals(rejected, always.get("watch").get("tables").get(0).get("values").findValues("count").stream().mapToInt(JsonNode::asInt).sum());
+        assertEquals("up", always.get("state").asText(), "and is still listening after the run has ended");
+        mvc.perform(delete("/api/connections/" + routed)).andExpect(status().isOk());
+    }
+
+    @Test
+    void aMonitorIsStartedSavedResetAndStoppedOverTheApi() throws Exception {
+        JsonNode monitor = sent(post("/api/monitors"), "{\"name\":\"Late ones\",\"connection\":\"dry-run\",\"destination\":\"MON.Q\",\"buckets\":[{\"header\":\"kind\"},{\"pointer\":\"/site\"}]}");
         String id = monitor.get("id").asText();
         assertEquals("MON.Q", monitor.get("watch").get("destination").asText());
+        assertEquals("up", monitor.get("state").asText());
+        assertFalse(monitor.get("saved").asBoolean());
         sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"body\":\"{\\\"site\\\":\\\"north-1\\\"}\",\"connection\":\"dry-run\",\"destination\":\"MON.Q\",\"count\":3,"
                 + "\"headers\":{\"kind\":\"late\"}}");
         lastRun();
-        mvc.perform(get("/api/monitors")).andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(id)).andExpect(jsonPath("$[0].watch.count").value(3))
-                .andExpect(jsonPath("$[0].watch.tables[0].values[0].value").value("late")).andExpect(jsonPath("$[0].watch.tables[1].values[0].value").value("north-1"))
-                .andExpect(jsonPath("$[0].watch.recent[0].bytes").value(18)).andExpect(jsonPath("$[0].watch.samples[0]").value("{\"site\":\"north-1\"}"));
-        // a run that would listen there too is refused while the monitor is on
-        mvc.perform(body(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":1,"
-                + "\"expect\":{\"connection\":\"dry-run\",\"destination\":\"MON.Q\"}}")).andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error", containsString("A monitor is receiving from Dry run / MON.Q")));
+        JsonNode counted = monitor(id);
+        assertEquals(3, counted.get("watch").get("count").asInt());
+        assertEquals("late", counted.get("watch").get("tables").get(0).get("values").get(0).get("value").asText());
+        assertEquals("north-1", counted.get("watch").get("tables").get(1).get("values").get(0).get("value").asText());
+        assertEquals(18, counted.get("watch").get("recent").get(0).get("bytes").asInt());
+        assertEquals("{\"site\":\"north-1\"}", counted.get("watch").get("samples").get(0).asText());
+
+        // kept in the file, taken out again, and removed with the monitor when it is stopped while saved
+        mvc.perform(put("/api/monitors/" + id + "/saved")).andExpect(status().isOk()).andExpect(jsonPath("$.saved").value(true));
+        JsonNode file = json.readTree(dir.resolve("msgforge.json").toFile()).get("monitors");
+        assertEquals("Late ones", file.get(file.size() - 1).get("name").asText());
+        assertEquals("kind", file.get(file.size() - 1).get("buckets").get(0).get("header").asText());
+        mvc.perform(delete("/api/monitors/" + id + "/saved")).andExpect(status().isOk()).andExpect(jsonPath("$.saved").value(false));
+        assertFalse(Files.readString(dir.resolve("msgforge.json")).contains("Late ones"));
+        mvc.perform(put("/api/monitors/" + id + "/saved")).andExpect(status().isOk());
         mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isOk()).andExpect(jsonPath("$.watch.count").value(0));
         mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isOk());
+        assertFalse(Files.readString(dir.resolve("msgforge.json")).contains("Late ones"));
+        assertTrue(Files.readString(dir.resolve("msgforge.json")).contains("ALWAYS.REJECTED"), "the others stay");
         mvc.perform(delete("/api/monitors/" + id)).andExpect(status().isNotFound());
         mvc.perform(post("/api/monitors/" + id + "/reset")).andExpect(status().isNotFound());
-        mvc.perform(get("/api/monitors")).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(put("/api/monitors/" + id + "/saved")).andExpect(status().isNotFound());
+        assertEquals(null, monitor(id));
+        // saved in the same request that starts it
+        String kept = sent(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"KEPT.Q\",\"save\":true}").get("id").asText();
+        assertTrue(Files.readString(dir.resolve("msgforge.json")).contains("KEPT.Q"));
+        mvc.perform(delete("/api/monitors/" + kept)).andExpect(status().isOk());
 
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"gone\",\"destination\":\"Q\"}")).andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Old broker is a rabbit (not installed) connection, which cannot receive."));
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\"}")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("Destination is required"));
+        mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"ALWAYS.REJECTED\"}")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("A monitor is already on Dry run / ALWAYS.REJECTED"));
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"nope\",\"destination\":\"Q\"}")).andExpect(status().isNotFound());
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"Q\",\"buckets\":[{}]}")).andExpect(status().isBadRequest());
         mvc.perform(body(post("/api/monitors"), "{\"connection\":\"dry-run\",\"destination\":\"Q\"}").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
+        mvc.perform(put("/api/monitors/always/saved").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
     }
 
     @Test

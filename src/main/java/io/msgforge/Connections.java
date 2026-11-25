@@ -172,6 +172,101 @@ public class Connections {
         };
     }
 
+    /**
+     * One subscription per connection and destination, however many listen: receiving takes messages off a queue, so a
+     * run and a monitor that each subscribed would split the messages between them, and both would be wrong. Here the
+     * first listener opens the subscription, every later one joins it, each gets every arrival, and the subscription
+     * closes when the last one has left. So a run that ends does not close a monitor's subscription, and a monitor
+     * that is stopped does not cut off a run.
+     *
+     * When receiving breaks, every listener's onError is told and the subscription takes no new listeners: the next
+     * one to ask opens a new one. A listener that joins rides on the connection's settings as they were when the
+     * subscription was opened.
+     */
+    // ponytail: a new listener that arrives while the last one is still closing opens a second subscription beside
+    // the one going away, and on a queue that one could take a message in its last moment. Hold newcomers back until
+    // the close has returned if that ever shows.
+    public TransportType.Subscription share(String id, String destination, Consumer<TransportType.Arrival> onArrival, Consumer<String> onError) {
+        String key = id + "\n" + destination;
+        Listener mine = new Listener(onArrival, onError);
+        while (true) {
+            Tap tap;
+            synchronized (taps) {
+                tap = taps.computeIfAbsent(key, k -> new Tap());
+            }
+            Tap joined = tap;
+            synchronized (tap) {
+                if (tap.over) continue;   // it broke or emptied while this listener was on its way: start another
+                tap.listeners.add(mine);   // before the subscription opens, so not one arrival goes unheard
+                if (!tap.opened) {
+                    tap.opened = true;
+                    try {
+                        tap.subscription = receive(id, destination, arrival -> {
+                            for (Listener l : joined.listeners) {
+                                try {
+                                    l.onArrival().accept(arrival);
+                                } catch (RuntimeException ignored) {
+                                    // one listener's trouble with an arrival is not the others'
+                                }
+                            }
+                        }, error -> {
+                            retire(key, joined);
+                            for (Listener l : joined.listeners) l.onError().accept(error);
+                        });
+                    } catch (RuntimeException e) {
+                        tap.listeners.remove(mine);
+                        retire(key, tap);
+                        throw e;
+                    }
+                }
+            }
+            return new TransportType.Subscription() {
+                private boolean left;
+
+                @Override
+                public void check() throws Exception {
+                    TransportType.Subscription s = joined.subscription;
+                    if (s != null) s.check();
+                }
+
+                @Override
+                public void close() {
+                    TransportType.Subscription last = null;
+                    synchronized (joined) {
+                        if (left) return;
+                        left = true;
+                        joined.listeners.remove(mine);
+                        if (joined.listeners.isEmpty() && !joined.closed) {
+                            joined.closed = true;
+                            retire(key, joined);
+                            last = joined.subscription;
+                        }
+                    }
+                    if (last != null) last.close();
+                }
+            };
+        }
+    }
+
+    /** No new listener joins this subscription; the ones it has keep it until they leave. */
+    private void retire(String key, Tap tap) {
+        tap.over = true;
+        synchronized (taps) {
+            taps.remove(key, tap);
+        }
+    }
+
+    private record Listener(Consumer<TransportType.Arrival> onArrival, Consumer<String> onError) {}
+
+    private static final class Tap {
+        final List<Listener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+        volatile TransportType.Subscription subscription;
+        volatile boolean over;
+        boolean opened, closed;
+    }
+
+    private final Map<String, Tap> taps = new java.util.HashMap<>();
+
     /** {@link #receive} for the bodies alone. */
     public TransportType.Subscription subscribe(String id, String destination, Consumer<String> onMessage, Consumer<String> onError) {
         return receive(id, destination, arrival -> onMessage.accept(arrival.body()), onError);

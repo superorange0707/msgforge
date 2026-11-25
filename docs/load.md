@@ -155,11 +155,32 @@ What arrives is somebody else's data, and a bucket expression is typed by a user
 
 ### Monitors
 
-A monitor is the same thing outside a run: Monitors › + in the sidebar, a connection that can receive, a destination, buckets. It counts until it is stopped; Reset clears its counts. Up to 10 at a time; they do not survive a restart. If receiving breaks, the monitor stops listening, keeps what it counted and shows the error.
+A monitor is the same thing outside a run: an always-on view of a reject queue, say. Monitors › + in the sidebar, a connection that can receive, a destination, buckets, and a name if you like. It counts until it is stopped; Reset clears its counts. Up to 10 at a time.
 
-A monitor and a run never listen on the same destination at once, because each would take some of the other's messages and the run's verdict would be wrong. Whichever comes second is refused with a message that names the first. To see a run's rejects sorted, let the run watch the destination.
+**Saved monitors.** A monitor can be kept in `msgforge.json`, in a `monitors` section beside `connections` and `scenarios`, and then starts with the console:
 
-API: `GET|POST /api/monitors` (`connection`, `destination`, `buckets`), `POST /api/monitors/{id}/reset`, `DELETE /api/monitors/{id}`.
+```json
+"monitors": [
+  {"id": "rejects", "name": "Rejected", "connection": "broker", "destination": "${MSGFORGE_REJECT_QUEUE}",
+   "buckets": [{"pointer": "/reason"}, {"header": "origin"}]}
+]
+```
+
+`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, Saved in the new-monitor dialog or on a running monitor writes it there, pressing it again takes it out (the monitor goes on watching), and stopping a saved monitor removes it from the file as well, after asking. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
+
+**A monitor that cannot listen** does not keep msgforge from starting. Saved monitors start after the console is up, one after the other on a thread of their own, and one whose broker does not answer (or whose connection is missing, or whose variable is not set) is listed as down with the reason. It tries again after 5, 10, 20, 40 and then every 60 seconds until it is up or stopped. The same happens when receiving breaks later: the monitor goes down, keeps what it counted, and comes back by itself. An entry that only an edit can mend (a bucket that is not a regular expression, no destination) is listed as down with what is wrong and is not retried. A monitor started by hand that cannot listen is refused with the reason and not created.
+
+`msgforge run` and `msgforge list` start no monitors: they have no console to show them, and a pipeline should not take messages off a queue that somebody is watching. With `--url` the run happens on the server, beside its monitors.
+
+**Sharing a destination.** Receiving takes messages off a queue, so two consumers on one queue would each get some of the messages. msgforge therefore opens one subscription per connection and destination, however many listen, and hands every arrival to each of them. A monitor on the reject queue goes on counting everything while a run expects its invalid messages there; the run matches the same arrivals; and neither is refused. The subscription closes when its last listener has gone: a run that ends leaves a monitor's subscription open, and a monitor that is stopped does not cut off a run.
+
+- This is within one msgforge. Another process on the same queue (a second msgforge, `msgforge run` without `--url`, any other consumer) still competes for the messages.
+- A listener that joins uses the subscription as it was opened: an edit to the connection reaches it when the last listener has left and the next one opens a new one.
+- When receiving breaks, every listener is told: a run ends as failed, a monitor goes down and retries.
+- A monitor sees everything on its destination, a run's messages included; that is the point of it.
+- Two runs that both *expect* arrivals on the same destination are still not allowed at once: the second is refused, with the first's name. Each would see the other's messages arrive, and a match expression that is not unique across runs (a counter, say) would take one for its own. A run that only watches a destination (`watches`) joins freely.
+
+API: `GET|POST /api/monitors` (`connection`, `destination`, `buckets`, `name`, `save`), `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved`, `DELETE /api/monitors/{id}`. Each monitor has a `state` (`starting`, `up`, `down`), and when down an `error` and the time of its next try in `retryAt`.
 
 ## Trying it without a broker
 
@@ -248,6 +269,25 @@ As it is saved in `msgforge.json` (`"scenarios": [ … ]`) and accepted by `POST
 
 `"match": "{{ref}}"` needs `{{ref=uuid}}` (or another binding named `ref`) in each template; leave `match` and the `ref` header out to match on the first `{{uuid}}` or `{{id}}` in the body and, for rejects, on the correlation id. `connection` is a connection's id. A send-only soak drops `expect`, `timeoutSeconds` and `match`, and may then set `"count": 0`. A run request (`POST /api/runs`) takes the same fields plus `label` and `raw`, and the single-template shorthand.
 
+The whole file, with a monitor that is on all day and the scenario beside it:
+
+```json
+{
+  "connections": [
+    {"id": "broker", "name": "Test broker", "type": "ibm-mq",
+     "settings": {"hosts": "${MSGFORGE_MQ_HOSTS}", "channel": "APP.SVRCONN", "user": "app", "password": "${MSGFORGE_MQ_PASSWORD}"},
+     "destinations": ["ORDERS.IN", "ORDERS.REJECTED"]}
+  ],
+  "monitors": [
+    {"id": "rejects", "name": "Rejected", "connection": "broker", "destination": "ORDERS.REJECTED",
+     "buckets": [{"pointer": "/reason"}, {"header": "origin"}]}
+  ],
+  "scenarios": [ { "name": "Order soak", "…": "as above" } ]
+}
+```
+
+The monitor and the scenario's `invalid.expect` and `watches` name the same queue; they share one subscription, so the panel keeps counting while the load test verifies.
+
 ## Command line
 
 ```bash
@@ -265,15 +305,18 @@ Tested automatically (`./gradlew test`), with Dry run and fakes unless said othe
 - Every kind of fault on JSON and XML; refusals; the same seed giving the same bodies and faults with one sender and with four.
 - The four outcomes for invalid messages, with a stand-in system under test, and the token in a header.
 - **Recognising a reply by its correlation id over real JMS**, against the embedded ActiveMQ Artemis broker: `JmsSender` reports the `JMSMessageID`, `JmsReceiver` hands over properties and `JMSCorrelationID`, and empty replies are matched.
-- Buckets, their limits, an expression that backtracks without end; monitors and the refusal in both directions.
+- Buckets, their limits, an expression that backtracks without end.
+- Monitors: saved ones loaded from the file and started, one whose broker is down retrying until it is up, one whose receiving breaks coming back, entries with mistakes listed and not retried, saving and forgetting from the API with the file checked each time.
+- The shared subscription, against a fake queue that gives each message to one consumer only: a monitor and a run on one destination both see every arrival through one subscription, the run's end does not close it, the monitor's stop does not cut the run off, the last listener closes it, a broken one tells everyone; a second run expecting on the same destination is refused.
 - Reports in each format, escaping, the reports folder and its retention; metrics and label escaping; the API and the command line for all of it.
 
-Checked by hand on the built release, on Dry run: a ramped run with four senders, invalid messages and a seed; a verified run with rejects expected on a reject destination; a monitor; each report format; `/metrics`; the console in a browser, dark and light.
+Checked by hand on the built release, on Dry run: a ramped run with four senders, invalid messages and a seed; a verified run with rejects expected on a reject destination; a monitor; a saved monitor that started with the console and counted the rejects of a verified run on the same destination; each report format; `/metrics`; the console in a browser, dark and light.
 
 Not tested:
 
 - **IBM MQ.** Correlation-id matching uses the same `JmsSender` and `JmsReceiver` as the Artemis test, and the IBM MQ client presents a reply's CorrelId, when it is a copy of the request's MsgId, as the same `ID:…` text as the request's `JMSMessageID`. That is how the client is documented to behave; it has not been run against a queue manager here. Nor has a load run.
 - **Every plugin against a real broker.** What each plugin hands over on arrival and reports as a message id is in the table below; their tests use fakes or mocks, and the tests against real servers only run when one is named.
+- Sharing a subscription on a real consuming queue (IBM MQ, SQS, a RabbitMQ queue). The sharing happens above the connection types and is tested with a fake that behaves like one; Dry run, where it was checked by hand, hands a copy to every listener anyway and would not show a split.
 - Throughput. No number here is a benchmark; Dry run on one machine says nothing about a broker.
 - Runs longer than a few minutes, and very high rates. The statistics are built to stay small, and that is tested by feeding them 2,000 seconds of data, not by running for a week.
 - The console in browsers other than Chrome, and with a screen reader: controls have labels, toggles say whether they are pressed, the chart has a text description, and everything can be reached by keyboard, but no assistive technology was run.

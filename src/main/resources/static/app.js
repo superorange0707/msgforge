@@ -1016,15 +1016,23 @@ function renderRunDetail(d) {
 }
 function renderMonitorDetail(m) {
   const parts = [];
-  if (m.error) parts.push(el('div', 'result bad', m.error));
+  if (m.error) parts.push(el('div', 'result bad', m.error + (m.retryAt ? ' Next try at ' + time(m.retryAt) + '.' : '')));
   parts.push(watchPanel(m.watch), el('p', 'note', 'Receiving takes the messages off a queue. Since ' + time(m.watch.since) + '.'));
-  showDetail(m.watch.connection + ' / ' + m.watch.destination, m.error ? 'FAILED' : 'RUNNING', () => {
-    const reset = el('button', 'btn', 'Reset'), stop = el('button', 'btn danger', 'Stop');
-    reset.type = stop.type = 'button';
-    reset.onclick = () => api('/monitors/' + m.id + '/reset', { method: 'POST' }).then(refreshOpen, e => toast(e.message, true));
-    stop.onclick = () => api('/monitors/' + m.id, { method: 'DELETE' }).then(() => { $('detail').close(); loadMonitors(); }, e => toast(e.message, true));
-    return [reset, stop];
+  // the buttons are built once per monitor; whether it is saved is repainted every time
+  showDetail(m.name || m.watch.connection + ' / ' + m.watch.destination, m.state === 'up' ? 'RUNNING' : m.state === 'down' ? 'FAILED' : 'VERIFYING', () => {
+    const save = el('button', 'btn hold', 'Saved'), reset = el('button', 'btn', 'Reset'), stop = el('button', 'btn danger', 'Stop');
+    save.type = reset.type = stop.type = 'button'; save.id = 'monitorSaved'; save.title = 'Keep it in msgforge.json: it then starts with msgforge';
+    const failed = e => toast(e.message, true), now = () => state.monitors.find(x => x.id === m.id);
+    save.onclick = () => api('/monitors/' + m.id + '/saved', { method: now()?.saved ? 'DELETE' : 'PUT' }).then(loadMonitors).then(refreshOpen, failed);
+    reset.onclick = () => api('/monitors/' + m.id + '/reset', { method: 'POST' }).then(loadMonitors).then(refreshOpen, failed);
+    stop.onclick = async () => {
+      if (now()?.saved && !await ask({ title: 'Stop this monitor?', text: 'It is saved, and is removed from msgforge.json as well.', ok: 'Stop', danger: true })) return;
+      api('/monitors/' + m.id, { method: 'DELETE' }).then(() => { $('detail').close(); loadMonitors(); }, failed);
+    };
+    return [save, reset, stop];
   }, parts);
+  $('detailChip').textContent = m.state === 'up' ? 'LISTENING' : m.state === 'down' ? 'DOWN' : 'STARTING';
+  $('monitorSaved')?.setAttribute('aria-pressed', m.saved);
 }
 async function refreshOpen() {
   const open = state.open;
@@ -1048,14 +1056,19 @@ async function loadMonitors() {
     if (!row) {
       row = el('div', 'scn'); row.dataset.id = m.id;
       const open = el('button', 'tpl'), stop = el('button', 'play');
-      open.append(el('span', 'name', m.watch.destination)); open.title = m.watch.connection + ' / ' + m.watch.destination; open.onclick = () => openMonitor(m.id);
-      stop.innerHTML = icon('x'); stop.title = 'Stop watching'; stop.setAttribute('aria-label', 'Stop watching ' + m.watch.destination);
-      stop.onclick = () => api('/monitors/' + m.id, { method: 'DELETE' }).then(loadMonitors, e => toast(e.message, true));
+      open.append(el('span', 'name', m.name || m.watch.destination)); open.title = m.watch.connection + ' / ' + m.watch.destination; open.onclick = () => openMonitor(m.id);
+      stop.innerHTML = icon('x'); stop.title = 'Stop watching'; stop.setAttribute('aria-label', 'Stop watching ' + (m.name || m.watch.destination));
+      stop.onclick = async () => {
+        const saved = state.monitors.find(x => x.id === m.id)?.saved;
+        if (saved && !await ask({ title: 'Stop this monitor?', text: 'It is saved, and is removed from msgforge.json as well.', ok: 'Stop', danger: true })) return;
+        api('/monitors/' + m.id, { method: 'DELETE' }).then(loadMonitors, e => toast(e.message, true));
+      };
       row.append(open, el('span', 'badge'), stop); box.append(row);
     }
     have.delete(m.id);
-    row.classList.toggle('bad', !!m.error);
-    row.querySelector('.badge').textContent = m.error ? 'failed' : m.watch.count.toLocaleString();
+    row.classList.toggle('bad', m.state === 'down');
+    row.querySelector('.badge').textContent = m.state === 'down' ? 'down' : m.watch.count.toLocaleString();
+    row.querySelector('.tpl').title = m.watch.connection + ' / ' + m.watch.destination + (m.error ? '\n' + m.error : '');
   }
   have.forEach(row => row.remove());
 }
@@ -1066,7 +1079,7 @@ function openMonitorForm() {
   $('mConn').replaceChildren(...known.map(c => new Option(c.name, c.id)));
   const dests = () => $('mDests').replaceChildren(...(connOf($('mConn').value)?.destinations || []).map(d => new Option(d)));
   $('mConn').onchange = dests; dests();
-  $('mDest').value = '';
+  $('mDest').value = $('mName').value = ''; pressed($('mSave'), false);
   $('mBuckets').replaceWith(Object.assign(bucketChips(newBuckets), { id: 'mBuckets' }));
   $('monitorDialog').showModal(); $('mDest').focus();
 }
@@ -1074,7 +1087,8 @@ async function startMonitor(e) {
   e.preventDefault();
   newBuckets.flush();
   try {
-    const m = await api('/monitors', json({ connection: $('mConn').value, destination: $('mDest').value, buckets: [...newBuckets] }));
+    const m = await api('/monitors', json({ name: $('mName').value.trim() || null, connection: $('mConn').value, destination: $('mDest').value, buckets: [...newBuckets],
+      save: $('mSave').getAttribute('aria-pressed') === 'true' }));
     $('monitorDialog').close(); await loadMonitors(); openMonitor(m.id);
   } catch (err) { toast(err.message, true); }
 }
@@ -1205,6 +1219,7 @@ $('invalidPercent').oninput = () => { state.invalid.percent = +$('invalidPercent
 $('raw').onclick = () => { state.raw = !state.raw; $('raw').setAttribute('aria-pressed', state.raw); $('vars').disabled = state.raw; preview(); };
 $('newMonitor').onclick = openMonitorForm;
 $('monitorForm').addEventListener('submit', startMonitor);
+$('mSave').onclick = () => pressed($('mSave'), $('mSave').getAttribute('aria-pressed') !== 'true');
 $('reports').onclick = openReports;
 $('scUnlimited').onclick = () => { sc.load.unlimited = !sc.load.unlimited; renderScenario(); };
 $('scInvalidPercent').oninput = renderScenario;
