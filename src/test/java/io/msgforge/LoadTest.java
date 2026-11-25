@@ -467,6 +467,49 @@ class LoadTest {
         }
     }
 
+    @Test
+    void theDryRunRouteStandsInForASystemThatRejectsWhatIsNotWellFormed(@TempDir Path dir) throws Exception {
+        DryRunType dry = new DryRunType();
+        Connections store = new Connections(new ConfigStore(dir.resolve("c.json").toString(), new ObjectMapper()), List.of(dry));
+        store.save(new Connections.Connection("dry-run", "Dry run", "dry-run", Map.of("route", "ORDERS.IN > ORDERS.OUT, invalid > ORDERS.REJECTED; A>B"), List.of()));
+        assertEquals("ORDERS.IN > ORDERS.OUT, invalid > ORDERS.REJECTED; A>B", store.get("dry-run").summary());
+        Runs runs = new Runs(packs, engine, store);
+
+        // cut-off, emptied and garbled messages are rejected with a reason; the run expects exactly that
+        List<Runs.Watch> byReason = List.of(new Runs.Watch("dry-run", "ORDERS.REJECTED", List.of(new Observer.Bucket(null, "/reason", null, null), new Observer.Bucket(null, null, null, "reason"))));
+        Runs.View run = finished(runs, runs.start(ordersRun(120, new Faults.Spec(30, List.of("empty", "garbage", "truncated"), REJECTED), 5, byReason)).id());
+        assertEquals("PASS", run.verdict(), run.checks().toString());
+        Observer.View rejects = runs.detail(run.id(), false).watches().stream().filter(w -> w.destination().equals("ORDERS.REJECTED")).findFirst().orElseThrow();
+        assertEquals(run.invalid(), rejects.count());
+        assertEquals(java.util.Set.of("empty", "not-json", "not-a-format"), rejects.tables().get(0).values().stream().map(Observer.Count::value).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(rejects.tables().get(0).values(), rejects.tables().get(1).values(), "the reason is in the body and in a header");
+        // a message with a field taken out is still well-formed: the stand-in lets it through, and the run says so
+        Runs.View lenient = finished(runs, runs.start(ordersRun(60, new Faults.Spec(30, List.of("field-removed"), REJECTED), 1, null)).id());
+        assertEquals("FAIL", lenient.verdict());
+        assertEquals(lenient.checks().get(1).sent(), lenient.checks().get(1).accepted());
+
+        assertNull(DryRunType.flaw("<a><b/></a>"));
+        assertNull(DryRunType.flaw(" [1, 2] "));
+        assertEquals("not-xml", DryRunType.flaw("<a><b></a>"));
+        assertEquals("not-xml", DryRunType.flaw("<!DOCTYPE a [<!ENTITY x SYSTEM \"file:///etc/hosts\">]><a>&x;</a>"));
+        assertEquals("not-json", DryRunType.flaw("{\"a\":1"));
+        assertEquals("not-a-format", DryRunType.flaw("site,12.5,ok"));
+        // without "invalid >" what is not well-formed goes nowhere; a destination with no route is the loopback it always was
+        TransportType.Sender out = dry.open(Map.of("route", "A > B"));
+        List<String> got = new CopyOnWriteArrayList<>();
+        try (TransportType.Subscription a = dry.subscribe(Map.of(), "A", got::add, e -> { }); TransportType.Subscription b = dry.subscribe(Map.of(), "B", got::add, e -> { });
+             TransportType.Subscription c = dry.subscribe(Map.of(), "C", got::add, e -> { })) {
+            out.send("A", "{}", Map.of());
+            out.send("A", "nonsense", Map.of());
+            out.send("C", "nonsense", Map.of());
+            assertEquals(List.of("{}", "nonsense"), got);
+        }
+        for (String wrong : List.of("A", "A > ", "A > B > C", "A > B, B > C", "A > B, invalid > C, more")) {
+            assertEquals("Write a route as FROM > TO, optionally followed by , invalid > REJECTS",
+                    assertThrows(IllegalArgumentException.class, () -> dry.open(Map.of("route", wrong))).getMessage(), wrong);
+        }
+    }
+
     // ---- watching
 
     @Test
