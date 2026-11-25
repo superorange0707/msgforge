@@ -39,6 +39,12 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 |---|---|---|
 | `amqp-client` | RabbitMQ Java client | Apache-2.0, MPL-2.0 or GPL-2.0; carried here under the Apache License 2.0 |
 
+## In the MQTT plugin (`plugins/msgforge-mqtt-*.jar`)
+
+| Jars | Project | Licence |
+|---|---|---|
+| `org.eclipse.paho.client.mqttv3`, `org.eclipse.paho.mqttv5.client` | Eclipse Paho Java client | EPL-2.0. Source code: <https://github.com/eclipse/paho.mqtt.java> |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.

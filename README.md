@@ -2,7 +2,7 @@
 
 A message simulator: write a template, press Send, and msgforge publishes as many generated messages as you ask for to a queue. Message formats live in files and everything else is set up in the console, so a new format, queue or broker is a few clicks, not a code change.
 
-It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka and RabbitMQ. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
+It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ and MQTT. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
 
 ![The msgforge console: a template with its preview, the send form, and two verified runs](docs/console.png)
 
@@ -172,6 +172,7 @@ The release carries these as plugins. Their settings, how headers map and how ea
 |---|---|---|
 | [Kafka](#the-kafka-plugin) | a topic | the client's mock producer and consumer only |
 | [RabbitMQ](docs/connections.md#rabbitmq) (AMQP 0-9-1) | a queue, or `exchange/routing-key` | RabbitMQ 4.4.1 |
+| [MQTT](docs/connections.md#mqtt) (5 and 3.1.1) | a topic | Mosquitto 2.1.4 |
 
 ## Running in a container
 
@@ -221,6 +222,7 @@ The Headers box adds message properties, written like Overrides: `JMSCorrelation
 | HTTP | a request header |
 | Kafka | a record header; `key` sets the record key |
 | RabbitMQ | an entry in the headers table; `correlation_id`, `message_id`, `type` and the other AMQP property names set that property |
+| MQTT | an MQTT 5 user property. MQTT 3.1.1 has none: a header fails the run. |
 
 ## Scenarios
 
@@ -264,6 +266,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 | IBM MQ | consumes: every message on the expected queue is taken off it, including ones msgforge did not send. Expect on queues that nothing else reads. |
 | Kafka | reads the topic from its end with no consumer group, so other consumers are not affected. A topic the broker is still creating is waited for (5 seconds). On a broker that creates topics on demand, expecting a topic creates it: a mistyped topic name shows up as missing messages, not as "topic not found". |
 | RabbitMQ | from a queue it consumes, like IBM MQ. From `exchange/routing-key` it binds a temporary queue of its own and takes nothing from other consumers. |
+| MQTT | subscribes with a clean session; every subscriber gets a copy, so others are not affected. Wildcards work. |
 | HTTP | cannot receive |
 
 Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.

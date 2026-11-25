@@ -1,0 +1,20 @@
+// MQTT 3.1.1 and 5 as a msgforge plugin. `./gradlew :extensions:mqtt:installPlugin` puts it in plugins/.
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+    imports { mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES }
+}
+
+apply from: rootProject.file('extensions/plugin.gradle')
+
+dependencies {
+    implementation 'org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5'
+    implementation 'org.eclipse.paho:org.eclipse.paho.mqttv5.client:1.2.5'
+
+    // an embedded broker that speaks both versions
+    testImplementation 'org.apache.activemq:artemis-server'
+    testImplementation 'org.apache.activemq:artemis-mqtt-protocol'
+}
