@@ -1,6 +1,7 @@
 package io.msgforge.nats;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -96,6 +97,34 @@ class NatsTypeTest {
     }
 
     @Test
+    void anArrivalCarriesTheMessageHeadersAndNoSendClaimsAnId() throws Exception {
+        Connection nc = mock(Connection.class);
+        Dispatcher dispatcher = mock(Dispatcher.class);
+        ArgumentCaptor<MessageHandler> handler = ArgumentCaptor.forClass(MessageHandler.class);
+        when(nc.createDispatcher(handler.capture())).thenReturn(dispatcher);
+        List<TransportType.Arrival> got = new CopyOnWriteArrayList<>();
+        NatsType.subscription(nc, "shipments.>", got::add, new NatsType.Problems(e -> { }));
+
+        Message withHeaders = mock(Message.class), bare = mock(Message.class);
+        when(withHeaders.getData()).thenReturn("shipped".getBytes(StandardCharsets.UTF_8));
+        when(withHeaders.getHeaders()).thenReturn(new Headers().add("trace", "t-7").add("region", "EU", "US"));
+        when(bare.getData()).thenReturn("bare".getBytes(StandardCharsets.UTF_8));   // and no headers: the client hands over null
+        handler.getValue().onMessage(withHeaders);
+        handler.getValue().onMessage(bare);
+
+        assertEquals("shipped", got.get(0).body());
+        assertEquals(Map.of("trace", "t-7", "region", "EU,US"), got.get(0).headers(), "several values of one header, joined");
+        assertNull(got.get(0).correlationId(), "NATS has no correlation field");
+        assertEquals(Map.of(), got.get(1).headers());
+
+        // neither kind of publish gives the message an id a subscriber could send back
+        assertNull(NatsType.sender(nc, null, new NatsType.Problems(e -> { })).sendForId("shipments.eu", "x", Map.of()));
+        JetStream js = mock(JetStream.class);
+        assertNull(NatsType.sender(nc, js, new NatsType.Problems(e -> { })).sendForId("shipments.eu", "x", Map.of()));
+        verify(js).publish(eq("shipments.eu"), isNull(Headers.class), any(byte[].class));
+    }
+
+    @Test
     void receivingSubscribesAndALostConnectionOrARefusalIsReported() throws Exception {
         Connection nc = mock(Connection.class);
         Dispatcher dispatcher = mock(Dispatcher.class);
@@ -105,7 +134,7 @@ class NatsTypeTest {
         List<Exception> errors = new CopyOnWriteArrayList<>();
         NatsType.Problems problems = new NatsType.Problems(errors::add);
 
-        TransportType.Subscription subscription = NatsType.subscription(nc, "orders.>", got::add, problems);
+        TransportType.Subscription subscription = NatsType.subscription(nc, "orders.>", a -> got.add(a.body()), problems);
         verify(dispatcher).subscribe("orders.>");
         verify(nc).flush(Duration.ofSeconds(10));
         Message m = mock(Message.class);

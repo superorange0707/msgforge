@@ -3,6 +3,7 @@ package io.msgforge.amqp;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -112,6 +113,33 @@ class AmqpTypeTest {
                 assertEquals("second", got.poll(10, TimeUnit.SECONDS));
                 in.check();
             }
+        }
+        assertTrue(errors.isEmpty(), errors.toString());
+    }
+
+    @Test
+    void aSendReturnsTheMessageIdAndAnArrivalCarriesItsPropertiesAndCorrelationId() throws Exception {
+        BlockingQueue<TransportType.Arrival> got = new LinkedBlockingQueue<>();
+        BlockingQueue<Exception> errors = new LinkedBlockingQueue<>();
+        try (TransportType.Sender out = type.open(settings());
+             TransportType.Subscription in = type.receive(settings(), "shipments", got::add, errors::add)) {
+            String id = out.sendForId("shipments", "shipped", Map.of("JMSCorrelationID", "order-41", "region", "EU"));
+            assertNotNull(id, "the id the client gave the message");
+
+            TransportType.Arrival arrival = got.poll(10, TimeUnit.SECONDS);
+            assertNotNull(arrival);
+            assertEquals("shipped", arrival.body());
+            assertEquals("order-41", arrival.correlationId());
+            assertEquals("EU", arrival.headers().get("region"));
+            assertEquals("order-41", arrival.headers().get("JMSCorrelationID"));
+            assertEquals(id, arrival.headers().get("JMSMessageID"), "the same id on both sides, so a reply that echoes it is recognised");
+
+            // the way a replying application does it: the request's message id as the reply's correlation id
+            out.send("shipments", "reply", Map.of("JMSCorrelationID", id));
+            assertEquals(id, got.poll(10, TimeUnit.SECONDS).correlationId());
+
+            out.send("shipments", "bare", Map.of());
+            assertNull(got.poll(10, TimeUnit.SECONDS).correlationId());
         }
         assertTrue(errors.isEmpty(), errors.toString());
     }

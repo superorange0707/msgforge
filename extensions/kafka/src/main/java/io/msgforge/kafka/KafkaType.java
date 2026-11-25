@@ -3,6 +3,7 @@ package io.msgforge.kafka;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -23,6 +24,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
@@ -31,7 +33,8 @@ import io.msgforge.TransportType;
 /**
  * Kafka as a msgforge connection type. The destination is the topic.
  * A header named "key" becomes the record key; every other header becomes a record header.
- * Receiving reads the topic from its end without a consumer group, so it takes nothing away from other consumers.
+ * Receiving reads the topic from its end without a consumer group, so it takes nothing away from other consumers;
+ * an arrival carries the record headers, and the record key under the same name "key".
  */
 public class KafkaType implements TransportType {
 
@@ -77,12 +80,12 @@ public class KafkaType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String topic, java.util.function.Consumer<String> onMessage,
-                                  java.util.function.Consumer<Exception> onError) {
+    public Subscription receive(Map<String, String> s, String topic, java.util.function.Consumer<Arrival> onArrival,
+                                java.util.function.Consumer<Exception> onError) {
         Properties config = properties(s);
         List.of("client.id", "acks", "max.block.ms", "delivery.timeout.ms").forEach(config::remove);   // the producer's own
         config.put("default.api.timeout.ms", "10000");
-        return subscription(new KafkaConsumer<>(config, new StringDeserializer(), new StringDeserializer()), topic, onMessage, onError, Duration.ofSeconds(5));
+        return subscription(new KafkaConsumer<>(config, new StringDeserializer(), new StringDeserializer()), topic, onArrival, onError, Duration.ofSeconds(5));
     }
 
     /**
@@ -91,7 +94,7 @@ public class KafkaType implements TransportType {
      * before the broker is asked whether it is still there, and how long it has to answer.
      */
     static Subscription subscription(org.apache.kafka.clients.consumer.Consumer<String, String> consumer, String topic,
-                                     java.util.function.Consumer<String> onMessage, java.util.function.Consumer<Exception> onError, Duration patience) {
+                                     java.util.function.Consumer<Arrival> onArrival, java.util.function.Consumer<Exception> onError, Duration patience) {
         List<TopicPartition> partitions;
         try {
             // A broker that creates topics on demand starts creating one when it is first asked about it, and answers
@@ -123,7 +126,8 @@ public class KafkaType implements TransportType {
                 while (true) {
                     ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(500));
                     for (ConsumerRecord<String, String> record : records) {
-                        if (record.value() != null) onMessage.accept(record.value());
+                        // Kafka has no correlation field of its own; applications that correlate do it in a header, which is delivered as one.
+                        if (record.value() != null) onArrival.accept(new Arrival(record.value(), headers(record), null));
                     }
                     CompletableFuture<Void> question = asked.getAndSet(null);
                     if (!records.isEmpty()) heard = System.nanoTime();
@@ -185,6 +189,17 @@ public class KafkaType implements TransportType {
                 }
             }
         };
+    }
+
+    /** What the sender turns into a record, read back the same way: the key under "key", the record headers as UTF-8 text. */
+    static Map<String, String> headers(ConsumerRecord<String, String> record) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (record.key() != null) headers.put("key", record.key());
+        // ponytail: a header name that occurs twice keeps its last value, and a record header named "key" replaces the record key.
+        for (Header h : record.headers()) {
+            if (h.value() != null) headers.put(h.key(), new String(h.value(), StandardCharsets.UTF_8));
+        }
+        return headers;
     }
 
     static Properties properties(Map<String, String> s) {

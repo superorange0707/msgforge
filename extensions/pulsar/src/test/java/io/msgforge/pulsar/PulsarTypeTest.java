@@ -1,6 +1,7 @@
 package io.msgforge.pulsar;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,6 +90,44 @@ class PulsarTypeTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void aSendReturnsTheMessageIdAndAnArrivalCarriesItsPropertiesAndKey() throws Exception {
+        PulsarClient client = mock(PulsarClient.class);
+        ProducerBuilder<String> builder = mock(ProducerBuilder.class, RETURNS_SELF);
+        Producer<String> producer = mock(Producer.class);
+        TypedMessageBuilder<String> message = mock(TypedMessageBuilder.class, RETURNS_SELF);
+        when(client.newProducer(Schema.STRING)).thenReturn(builder);
+        when(builder.create()).thenReturn(producer);
+        when(producer.newMessage()).thenReturn(message);
+        org.apache.pulsar.client.api.MessageId stored = mock(org.apache.pulsar.client.api.MessageId.class);
+        when(stored.toString()).thenReturn("12:7:-1");
+        when(message.send()).thenReturn(stored).thenReturn(null);
+        TransportType.Sender sender = PulsarType.sender(client);
+        assertEquals("12:7:-1", sender.sendForId("shipments", "shipped", Map.of()), "the id the broker stored it under");
+        assertNull(sender.sendForId("shipments", "again", Map.of()), "and no id is made up when the client gives none");
+        sender.send("shipments", "plain", Map.of());
+        verify(message, org.mockito.Mockito.times(3)).send();   // a plain send sends once
+
+        Reader<String> reader = mock(Reader.class);
+        Message<String> keyed = mock(Message.class), bare = mock(Message.class);
+        when(keyed.getValue()).thenReturn("shipped");
+        when(keyed.hasKey()).thenReturn(true);
+        when(keyed.getKey()).thenReturn("K-1");
+        when(keyed.getProperties()).thenReturn(Map.of("region", "EU"));
+        when(bare.getValue()).thenReturn("bare");
+        when(reader.readNext(anyInt(), any(TimeUnit.class))).thenReturn(keyed).thenReturn(bare).thenReturn(null);
+        BlockingQueue<TransportType.Arrival> got = new LinkedBlockingQueue<>();
+        TransportType.Subscription subscription = PulsarType.subscription(mock(PulsarClient.class), reader, got::add, e -> { });
+
+        TransportType.Arrival first = got.poll(5, TimeUnit.SECONDS), second = got.poll(5, TimeUnit.SECONDS);
+        subscription.close();
+        assertEquals("shipped", first.body());
+        assertEquals(Map.of("key", "K-1", "region", "EU"), first.headers(), "what the sender takes as headers");
+        assertNull(first.correlationId(), "Pulsar has no correlation field");
+        assertEquals(Map.of(), second.headers());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void theReaderHandsOnEachValueAndAFailureIsReported() throws Exception {
         PulsarClient client = mock(PulsarClient.class);
         Reader<String> reader = mock(Reader.class);
@@ -99,7 +138,7 @@ class PulsarTypeTest {
         BlockingQueue<String> got = new LinkedBlockingQueue<>();
         BlockingQueue<Exception> errors = new LinkedBlockingQueue<>();
 
-        TransportType.Subscription subscription = PulsarType.subscription(client, reader, got::add, errors::add);
+        TransportType.Subscription subscription = PulsarType.subscription(client, reader, a -> got.add(a.body()), errors::add);
         assertEquals("hello", got.poll(5, TimeUnit.SECONDS));
         subscription.check();
         subscription.close();
@@ -109,7 +148,7 @@ class PulsarTypeTest {
 
         Reader<String> broken = mock(Reader.class);
         when(broken.readNext(anyInt(), any(TimeUnit.class))).thenThrow(new PulsarClientException.AlreadyClosedException("Consumer already closed"));
-        TransportType.Subscription failing = PulsarType.subscription(mock(PulsarClient.class), broken, got::add, errors::add);
+        TransportType.Subscription failing = PulsarType.subscription(mock(PulsarClient.class), broken, a -> got.add(a.body()), errors::add);
         assertEquals("Consumer already closed", errors.poll(5, TimeUnit.SECONDS).getMessage());
         assertThrows(PulsarClientException.class, failing::check);
         failing.close();

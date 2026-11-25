@@ -132,7 +132,7 @@ class RabbitMqTypeTest {
         List<String> got = new CopyOnWriteArrayList<>();
         List<Exception> errors = new CopyOnWriteArrayList<>();
 
-        TransportType.Subscription subscription = RabbitMqType.subscription(connection, "out", got::add, errors::add);
+        TransportType.Subscription subscription = RabbitMqType.subscription(connection, "out", a -> got.add(a.body()), errors::add);
         verify(channel).queueDeclarePassive("out");
         verify(channel, never()).queueBind(anyString(), anyString(), anyString());
         consumer.get().handleDelivery("tag", new Envelope(1, false, "", "out"), null, "hello".getBytes(StandardCharsets.UTF_8));
@@ -149,6 +149,42 @@ class RabbitMqTypeTest {
 
         subscription.close();
         verify(connection).close(5_000);
+    }
+
+    @Test
+    void anArrivalCarriesTheHeadersTableThePropertiesAndTheCorrelationId() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.createChannel()).thenReturn(channel);
+        AtomicReference<DefaultConsumer> consumer = new AtomicReference<>();
+        when(channel.basicConsume(eq("out"), eq(true), any(com.rabbitmq.client.Consumer.class))).thenAnswer(call -> {
+            consumer.set(call.getArgument(2));
+            return "tag";
+        });
+        List<TransportType.Arrival> got = new CopyOnWriteArrayList<>();
+        RabbitMqType.subscription(connection, "out", got::add, e -> { });
+
+        // as the client delivers it: a string in the table is a LongString, a number stays a number
+        Map<String, Object> table = new java.util.LinkedHashMap<>();
+        table.put("region", com.rabbitmq.client.impl.LongStringHelper.asLongString("EU"));
+        table.put("attempt", 3);
+        table.put("unset", null);
+        AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder().headers(table).correlationId("c-1").messageId("m-9")
+                .contentType("application/json").replyTo("replies").type("order.shipped").appId("warehouse").priority(5).expiration("60000").build();
+        consumer.get().handleDelivery("tag", new Envelope(1, false, "", "out"), properties, "shipped".getBytes(StandardCharsets.UTF_8));
+        consumer.get().handleDelivery("tag", new Envelope(2, false, "", "out"), new AMQP.BasicProperties(), "bare".getBytes(StandardCharsets.UTF_8));
+
+        TransportType.Arrival first = got.get(0), second = got.get(1);
+        assertEquals("shipped", first.body());
+        assertEquals("c-1", first.correlationId());
+        assertEquals(Map.of("region", "EU", "attempt", "3", "correlation_id", "c-1", "message_id", "m-9", "content_type", "application/json",
+                "reply_to", "replies", "type", "order.shipped", "app_id", "warehouse"), first.headers(), "under the names the sender takes them by");
+        assertEquals(Map.of(), second.headers());
+        assertNull(second.correlationId());
+
+        // what was sent with those headers comes back as the same headers
+        Map<String, String> sent = Map.of("correlation_id", "c-2", "type", "order.created", "region", "EU");
+        assertEquals(sent, RabbitMqType.headers(RabbitMqType.properties(sent)));
     }
 
     @Test

@@ -3,6 +3,7 @@ package io.msgforge.pulsar;
 import java.io.File;
 import java.net.URI;
 import java.security.KeyStore;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +30,8 @@ import io.msgforge.ext.Tls;
 /**
  * Apache Pulsar. The destination is a topic. A header named "key" becomes the message key; every other header becomes
  * a message property. Receiving reads the topic from its end with a reader, which has no durable subscription,
- * so it takes nothing from anyone.
+ * so it takes nothing from anyone. An arrival carries the message's properties, and its key under the same name "key".
+ * A send returns the message id the broker stored the message under.
  */
 public class PulsarType implements TransportType {
 
@@ -66,7 +68,7 @@ public class PulsarType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String topic, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
+    public Subscription receive(Map<String, String> s, String topic, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
         PulsarClient client = client(s);
         Reader<String> reader;
         try {
@@ -76,7 +78,7 @@ public class PulsarType implements TransportType {
             close(client);
             throw unanswered(e);
         }
-        return subscription(client, reader, onMessage, onError);
+        return subscription(client, reader, onArrival, onError);
     }
 
     static PulsarClient client(Map<String, String> s) throws Exception {
@@ -134,6 +136,15 @@ public class PulsarType implements TransportType {
         return new Sender() {
             @Override
             public void send(String topic, String body, Map<String, String> headers) throws Exception {
+                sendForId(topic, body, headers);
+            }
+
+            /**
+             * The broker's message id as text (ledger:entry:partition), the same text a consumer gets from its message's id.
+             * Pulsar has no correlation field: a system that answers echoes it in a property or in the body.
+             */
+            @Override
+            public String sendForId(String topic, String body, Map<String, String> headers) throws Exception {
                 Producer<String> producer = producers.get(topic);
                 if (producer == null) {
                     try {
@@ -148,7 +159,8 @@ public class PulsarType implements TransportType {
                     if (name.equals("key")) message.key(value);
                     else message.property(name, value);
                 });
-                message.send();   // waits for the broker to store it
+                MessageId id = message.send();   // waits for the broker to store it
+                return id == null ? null : id.toString();
             }
 
             /**
@@ -176,15 +188,28 @@ public class PulsarType implements TransportType {
         };
     }
 
+    /** What the sender turns into a message, read back the same way: the key under "key", the properties as they are. */
+    static Map<String, String> headers(Message<String> m) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (m.hasKey() && m.getKey() != null) headers.put("key", m.getKey());
+        // ponytail: a property named "key" replaces the message key.
+        if (m.getProperties() != null) {
+            m.getProperties().forEach((name, value) -> {
+                if (value != null) headers.put(name, value);
+            });
+        }
+        return headers;
+    }
+
     /** Takes over the client and the reader: the reader is read on its own thread, and both are closed with the subscription. */
-    static Subscription subscription(PulsarClient client, Reader<String> reader, Consumer<String> onMessage, Consumer<Exception> onError) {
+    static Subscription subscription(PulsarClient client, Reader<String> reader, Consumer<Arrival> onArrival, Consumer<Exception> onError) {
         AtomicBoolean closing = new AtomicBoolean();
         AtomicReference<Exception> ended = new AtomicReference<>();
         Thread thread = new Thread(() -> {
             try {
                 while (!closing.get()) {
                     Message<String> m = reader.readNext(500, TimeUnit.MILLISECONDS);
-                    if (m != null && m.getValue() != null) onMessage.accept(m.getValue());
+                    if (m != null && m.getValue() != null) onArrival.accept(new Arrival(m.getValue(), headers(m), null));
                 }
             } catch (Throwable e) {
                 Exception reason = e instanceof Exception x ? x : new IllegalStateException(e.toString());

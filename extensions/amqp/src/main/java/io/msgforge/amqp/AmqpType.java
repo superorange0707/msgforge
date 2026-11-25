@@ -16,7 +16,8 @@ import io.msgforge.ext.Tls;
 /**
  * AMQP 1.0 through Apache Qpid JMS, so any broker that speaks it: ActiveMQ Artemis, ActiveMQ, Azure Service Bus,
  * Solace, RabbitMQ 4 and others. The destination is the broker's address for a queue. Sending and receiving are
- * msgforge's own JMS sender and receiver, as for IBM MQ.
+ * msgforge's own JMS sender and receiver, as for IBM MQ: a send returns the message id, and an arrival carries its
+ * application properties and its correlation id.
  */
 public class AmqpType implements TransportType {
 
@@ -62,8 +63,8 @@ public class AmqpType implements TransportType {
 
     /** Consumes: every message it receives is taken off the queue. */
     @Override
-    public Subscription subscribe(Map<String, String> s, String destination, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
-        return new JmsReceiver(factory(s), destination, onMessage, onError);
+    public Subscription receive(Map<String, String> s, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
+        return JmsReceiver.arrivals(factory(s), destination, onArrival, onError);
     }
 
     static JmsConnectionFactory factory(Map<String, String> s) throws Exception {

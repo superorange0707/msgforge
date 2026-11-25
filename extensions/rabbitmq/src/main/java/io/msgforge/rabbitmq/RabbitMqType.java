@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -25,6 +26,7 @@ import io.msgforge.ext.Tls;
 /**
  * RabbitMQ over AMQP 0-9-1. The destination is a queue name, or exchange/routing-key to publish to an exchange.
  * Receiving from a queue consumes it; receiving from exchange/routing-key binds a temporary queue of its own.
+ * An arrival carries the headers table and the properties below under the names the sender takes them by.
  */
 public class RabbitMqType implements TransportType {
 
@@ -66,8 +68,8 @@ public class RabbitMqType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String destination, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
-        return subscription(factory(s).newConnection("msgforge-receive"), destination, onMessage, onError);
+    public Subscription receive(Map<String, String> s, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
+        return subscription(factory(s).newConnection("msgforge-receive"), destination, onArrival, onError);
     }
 
     static ConnectionFactory factory(Map<String, String> s) throws Exception {
@@ -129,6 +131,35 @@ public class RabbitMqType implements TransportType {
         return p.headers(table.isEmpty() ? null : table).build();
     }
 
+    /**
+     * The reverse of {@link #properties(Map)} for the text properties: the headers table, then each property that is set
+     * under the name a header sets it by. expiration and priority say how the broker treats the message, not what it
+     * is, and delivery mode is always set by the sender, so those are left out.
+     */
+    static Map<String, String> headers(AMQP.BasicProperties p) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (p == null) return headers;
+        if (p.getHeaders() != null) {
+            // The client hands a string in the table over as a LongString, whose toString() is its text.
+            // ponytail: a nested table or list arrives as Java's toString() of it, not as JSON.
+            p.getHeaders().forEach((name, value) -> {
+                if (value != null) headers.put(name, value instanceof byte[] bytes ? new String(bytes, StandardCharsets.UTF_8) : value.toString());
+            });
+        }
+        put(headers, "content_type", p.getContentType());
+        put(headers, "content_encoding", p.getContentEncoding());
+        put(headers, "correlation_id", p.getCorrelationId());
+        put(headers, "message_id", p.getMessageId());
+        put(headers, "reply_to", p.getReplyTo());
+        put(headers, "type", p.getType());
+        put(headers, "app_id", p.getAppId());
+        return headers;
+    }
+
+    private static void put(Map<String, String> headers, String name, String value) {
+        if (value != null) headers.put(name, value);
+    }
+
     /** Takes over the connection and closes it with the sender. */
     static Sender sender(Connection connection) throws IOException {
         Channel channel;
@@ -171,7 +202,7 @@ public class RabbitMqType implements TransportType {
     }
 
     /** Takes over the connection and closes it with the subscription. */
-    static Subscription subscription(Connection connection, String destination, Consumer<String> onMessage, Consumer<Exception> onError) throws IOException {
+    static Subscription subscription(Connection connection, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws IOException {
         String queue;
         Channel channel;
         try {
@@ -188,7 +219,7 @@ public class RabbitMqType implements TransportType {
             channel.basicConsume(queue, true, new DefaultConsumer(channel) {
                 @Override
                 public void handleDelivery(String tag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) {
-                    onMessage.accept(new String(body, StandardCharsets.UTF_8));
+                    onArrival.accept(new Arrival(new String(body, StandardCharsets.UTF_8), headers(properties), properties == null ? null : properties.getCorrelationId()));
                 }
 
                 @Override

@@ -81,7 +81,7 @@ class KafkaTypeTest {
         BlockingQueue<String> got = new LinkedBlockingQueue<>();
 
         List<Exception> errors = new java.util.concurrent.CopyOnWriteArrayList<>();
-        TransportType.Subscription subscription = KafkaType.subscription(consumer, "out", got::add, errors::add, SOON);
+        TransportType.Subscription subscription = KafkaType.subscription(consumer, "out", a -> got.add(a.body()), errors::add, SOON);
         assertEquals(Set.of(p0, p1), consumer.assignment());
         assertEquals(5, consumer.position(p0), "positioned at the end before the first poll");
 
@@ -103,13 +103,13 @@ class KafkaTypeTest {
         failing.updateEndOffsets(Map.of(p0, 0L));
         BlockingQueue<Exception> reported = new LinkedBlockingQueue<>();
         failing.setPollException(new org.apache.kafka.common.KafkaException("not authorised to read out"));
-        TransportType.Subscription broken = KafkaType.subscription(failing, "out", got::add, reported::add, SOON);
+        TransportType.Subscription broken = KafkaType.subscription(failing, "out", a -> got.add(a.body()), reported::add, SOON);
         assertEquals("not authorised to read out", reported.poll(5, TimeUnit.SECONDS).getMessage());
         broken.close();
         assertTrue(failing.closed());
 
         MockConsumer<String, String> other = new MockConsumer<>(OffsetResetStrategy.LATEST);
-        assertThrows(IllegalArgumentException.class, () -> KafkaType.subscription(other, "no-such-topic", got::add, errors::add, SOON));
+        assertThrows(IllegalArgumentException.class, () -> KafkaType.subscription(other, "no-such-topic", a -> got.add(a.body()), errors::add, SOON));
         assertTrue(other.closed());
 
         // A topic the broker is still creating: unknown at the first ask, there a moment later. It is waited for.
@@ -124,7 +124,7 @@ class KafkaTypeTest {
             late.updatePartitions("out", List.of(new PartitionInfo("out", 0, null, null, null)));
         });
         creating.start();
-        TransportType.Subscription waited = KafkaType.subscription(late, "out", got::add, errors::add, java.time.Duration.ofSeconds(5));
+        TransportType.Subscription waited = KafkaType.subscription(late, "out", a -> got.add(a.body()), errors::add, java.time.Duration.ofSeconds(5));
         assertEquals(Set.of(p0), late.assignment());
         waited.close();
 
@@ -138,7 +138,7 @@ class KafkaTypeTest {
         };
         gone.updatePartitions("out", List.of(new PartitionInfo("out", 0, null, null, null)));
         gone.updateEndOffsets(Map.of(p0, 0L));
-        TransportType.Subscription deaf = KafkaType.subscription(gone, "out", got::add, reported::add, SOON);
+        TransportType.Subscription deaf = KafkaType.subscription(gone, "out", a -> got.add(a.body()), reported::add, SOON);
         assertEquals("The Kafka broker stopped answering", reported.poll(5, TimeUnit.SECONDS).getMessage());
         deaf.close();
         assertTrue(gone.closed());
@@ -153,7 +153,7 @@ class KafkaTypeTest {
         };
         justGone.updatePartitions("out", List.of(new PartitionInfo("out", 0, null, null, null)));
         justGone.updateEndOffsets(Map.of(p0, 0L));
-        TransportType.Subscription asked = KafkaType.subscription(justGone, "out", got::add, reported::add, java.time.Duration.ofMinutes(1));
+        TransportType.Subscription asked = KafkaType.subscription(justGone, "out", a -> got.add(a.body()), reported::add, java.time.Duration.ofMinutes(1));
         long before = System.nanoTime();
         assertEquals("The Kafka broker stopped answering", assertThrows(IllegalStateException.class, asked::check).getMessage());
         assertTrue(System.nanoTime() - before < 5_000_000_000L, "answered in seconds, not after the minute of patience");
@@ -161,6 +161,35 @@ class KafkaTypeTest {
         assertTrue(justGone.closed());
         assertTrue(errors.isEmpty(), "and a broker that does answer is not reported: the first consumer above was asked more than once");
         assertTrue(new KafkaType().canReceive());
+    }
+
+    @Test
+    void anArrivalCarriesTheRecordHeadersAndItsKey() throws Exception {
+        MockConsumer<String, String> consumer = new MockConsumer<>(OffsetResetStrategy.LATEST);
+        TopicPartition p0 = new TopicPartition("out", 0);
+        consumer.updatePartitions("out", List.of(new PartitionInfo("out", 0, null, null, null)));
+        consumer.updateEndOffsets(Map.of(p0, 0L));
+        BlockingQueue<TransportType.Arrival> got = new LinkedBlockingQueue<>();
+        TransportType.Subscription subscription = KafkaType.subscription(consumer, "out", got::add, e -> { }, java.time.Duration.ofSeconds(5));
+
+        ConsumerRecord<String, String> keyed = new ConsumerRecord<>("out", 0, 0, "K-1", "shipped");
+        keyed.headers().add("trace", "t-7".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keyed.headers().add("région", "é".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keyed.headers().add("empty", null);
+        consumer.addRecord(keyed);
+        consumer.addRecord(new ConsumerRecord<>("out", 0, 1, null, "bare"));
+
+        TransportType.Arrival first = got.poll(5, TimeUnit.SECONDS), second = got.poll(5, TimeUnit.SECONDS);
+        subscription.close();
+        assertEquals("shipped", first.body());
+        assertEquals(Map.of("key", "K-1", "trace", "t-7", "région", "é"), first.headers(), "what the sender takes as headers, a header without a value left out");
+        assertEquals(List.of("key", "trace", "région"), List.copyOf(first.headers().keySet()), "in the record's order");
+        assertNull(first.correlationId(), "Kafka has no correlation field");
+        assertEquals(Map.of(), second.headers());
+
+
+        MockProducer<String, String> producer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        assertNull(KafkaType.sender(producer, new Properties()).sendForId("orders", "x", Map.of()), "no id a consumer could echo, so none is claimed");
     }
 
     @Test

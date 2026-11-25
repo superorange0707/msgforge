@@ -3,6 +3,7 @@ package io.msgforge.mqtt;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -94,6 +95,53 @@ class MqttTypeTest {
         assertEquals(List.of(new UserProperty("region", "EU")), seen.getProperties().getUserProperties());
         watcher.disconnect();
         watcher.close();
+        assertTrue(errors.isEmpty(), "closing is not an error: " + errors);
+    }
+
+    @Test
+    void aVersion5ArrivalCarriesItsUserPropertiesAndCorrelationDataAndA311ArrivalHasNeither() throws Exception {
+        // without a broker: what the client hands over, turned into an arrival
+        MqttMessage reply = new MqttMessage("shipped".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        org.eclipse.paho.mqttv5.common.packet.MqttProperties properties = new org.eclipse.paho.mqttv5.common.packet.MqttProperties();
+        properties.setUserProperties(List.of(new UserProperty("region", "EU"), new UserProperty("trace", "t-7")));
+        properties.setCorrelationData("order-41".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        reply.setProperties(properties);
+        TransportType.Arrival made = MqttType.arrival(reply);
+        assertEquals("shipped", made.body());
+        assertEquals(List.of("region", "trace"), List.copyOf(made.headers().keySet()));
+        assertEquals("order-41", made.correlationId());
+        TransportType.Arrival bare = MqttType.arrival(new MqttMessage(new byte[0]));
+        assertEquals(Map.of(), bare.headers());
+        assertNull(bare.correlationId());
+
+        // and through the broker, in both versions
+        BlockingQueue<TransportType.Arrival> got5 = new LinkedBlockingQueue<>(), got3 = new LinkedBlockingQueue<>();
+        BlockingQueue<Exception> errors = new LinkedBlockingQueue<>();
+        MqttClient replier = new MqttClient(uri, "replier", new org.eclipse.paho.mqttv5.client.persist.MemoryPersistence());
+        replier.connect();
+        try (TransportType.Subscription five = type.receive(Map.of("uri", uri), "replies/#", got5::add, errors::add);
+             TransportType.Subscription three = type.receive(Map.of("uri", uri, "version", "3.1.1"), "replies/#", got3::add, errors::add);
+             TransportType.Sender out = type.open(Map.of("uri", uri))) {
+            reply.setQos(1);
+            replier.publish("replies/eu", reply);
+            TransportType.Arrival arrived = got5.poll(10, TimeUnit.SECONDS);
+            assertNotNull(arrived);
+            assertEquals("shipped", arrived.body());
+            assertEquals(Map.of("region", "EU", "trace", "t-7"), arrived.headers());
+            assertEquals("order-41", arrived.correlationId());
+
+            TransportType.Arrival old = got3.poll(10, TimeUnit.SECONDS);
+            assertNotNull(old);
+            assertEquals("shipped", old.body());
+            assertEquals(Map.of(), old.headers(), "3.1.1 has nowhere to carry them");
+            assertNull(old.correlationId());
+
+            // what this sender puts in as headers comes back as headers; MQTT gives a message no id a receiver sees
+            assertNull(out.sendForId("replies/eu", "again", Map.of("region", "EU")));
+            assertEquals(Map.of("region", "EU"), got5.poll(10, TimeUnit.SECONDS).headers());
+        }
+        replier.disconnect();
+        replier.close();
         assertTrue(errors.isEmpty(), "closing is not an error: " + errors);
     }
 

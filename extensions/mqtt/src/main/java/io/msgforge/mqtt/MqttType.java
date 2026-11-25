@@ -2,6 +2,7 @@ package io.msgforge.mqtt;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -28,7 +29,8 @@ import io.msgforge.ext.Tls;
 /**
  * MQTT 3.1.1 or 5, through the Eclipse Paho clients. The destination is a topic. Headers become MQTT 5 user properties;
  * 3.1.1 has nowhere to put them, so a header there is an error. Receiving subscribes with a clean session:
- * every subscriber gets its own copy, so nothing is taken from anyone.
+ * every subscriber gets its own copy, so nothing is taken from anyone. An MQTT 5 arrival carries its user properties
+ * and its correlation data; a 3.1.1 message has neither.
  */
 public class MqttType implements TransportType {
 
@@ -90,10 +92,10 @@ public class MqttType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String topic, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
+    public Subscription receive(Map<String, String> s, String topic, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
         Client client = connect(s, "-r", onError);
         try {
-            client.subscribe(topic, qos(s), onMessage);
+            client.subscribe(topic, qos(s), onArrival);
         } catch (Exception e) {
             client.close();
             throw e;
@@ -119,7 +121,7 @@ public class MqttType implements TransportType {
 
         void publish(String topic, byte[] body, int qos, boolean retain, Map<String, String> headers) throws Exception;
 
-        void subscribe(String topic, int qos, Consumer<String> onMessage) throws Exception;
+        void subscribe(String topic, int qos, Consumer<Arrival> onArrival) throws Exception;
 
         void ping() throws Exception;
 
@@ -164,11 +166,28 @@ public class MqttType implements TransportType {
         }
     }
 
+    /** An MQTT 5 message with its user properties as headers and its correlation data, which the protocol defines as bytes, read as UTF-8. */
+    static Arrival arrival(MqttMessage message) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        MqttProperties properties = message.getProperties();
+        String correlation = null;
+        if (properties != null) {
+            // ponytail: user properties may repeat a name; the last value is kept.
+            if (properties.getUserProperties() != null) {
+                for (UserProperty p : properties.getUserProperties()) {
+                    if (p.getKey() != null && p.getValue() != null) headers.put(p.getKey(), p.getValue());
+                }
+            }
+            if (properties.getCorrelationData() != null) correlation = new String(properties.getCorrelationData(), StandardCharsets.UTF_8);
+        }
+        return new Arrival(new String(message.getPayload(), StandardCharsets.UTF_8), headers, correlation);
+    }
+
     static final class V5 implements Client {
 
         private final MqttAsyncClient client;
         private volatile boolean closing;
-        private volatile Consumer<String> sink = body -> { };
+        private volatile Consumer<Arrival> sink = arrival -> { };
 
         private V5(MqttAsyncClient client) {
             this.client = client;
@@ -205,7 +224,7 @@ public class MqttType implements TransportType {
 
                 @Override
                 public void messageArrived(String topic, MqttMessage message) {
-                    v5.sink.accept(new String(message.getPayload(), StandardCharsets.UTF_8));
+                    v5.sink.accept(arrival(message));
                 }
 
                 @Override
@@ -243,8 +262,8 @@ public class MqttType implements TransportType {
         }
 
         @Override
-        public void subscribe(String topic, int qos, Consumer<String> onMessage) throws Exception {
-            sink = onMessage;   // one subscription per client, so the client's callback is its listener
+        public void subscribe(String topic, int qos, Consumer<Arrival> onArrival) throws Exception {
+            sink = onArrival;   // one subscription per client, so the client's callback is its listener
             IMqttToken token = client.subscribe(new MqttSubscription(topic, qos));
             token.waitForCompletion(WAIT_MS);
             refused("subscription to " + topic, token.getReasonCodes());
@@ -275,7 +294,7 @@ public class MqttType implements TransportType {
 
         private final org.eclipse.paho.client.mqttv3.MqttAsyncClient client;
         private volatile boolean closing;
-        private volatile Consumer<String> sink = body -> { };
+        private volatile Consumer<Arrival> sink = arrival -> { };
 
         private V3(org.eclipse.paho.client.mqttv3.MqttAsyncClient client) {
             this.client = client;
@@ -307,7 +326,8 @@ public class MqttType implements TransportType {
 
                 @Override
                 public void messageArrived(String topic, org.eclipse.paho.client.mqttv3.MqttMessage message) {
-                    v3.sink.accept(new String(message.getPayload(), StandardCharsets.UTF_8));
+                    // 3.1.1 has a topic and a payload, nothing else: no headers, no correlation
+                    v3.sink.accept(new Arrival(new String(message.getPayload(), StandardCharsets.UTF_8), Map.of(), null));
                 }
 
                 @Override
@@ -332,8 +352,8 @@ public class MqttType implements TransportType {
         }
 
         @Override
-        public void subscribe(String topic, int qos, Consumer<String> onMessage) throws Exception {
-            sink = onMessage;
+        public void subscribe(String topic, int qos, Consumer<Arrival> onArrival) throws Exception {
+            sink = onArrival;
             org.eclipse.paho.client.mqttv3.IMqttToken token = client.subscribe(topic, qos);
             token.waitForCompletion(WAIT_MS);
             refused("subscription to " + topic, token.getGrantedQos());

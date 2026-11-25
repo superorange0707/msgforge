@@ -44,6 +44,7 @@ class SqsTypeTest {
         final BlockingQueue<Message> waiting = new LinkedBlockingQueue<>();
         final List<String> deleted = new CopyOnWriteArrayList<>();
         final AtomicBoolean closed = new AtomicBoolean();
+        final List<ReceiveMessageRequest> receives = new CopyOnWriteArrayList<>();
         volatile RuntimeException failReceive;
         volatile RuntimeException failList;
 
@@ -56,12 +57,13 @@ class SqsTypeTest {
         @Override
         public SendMessageResponse sendMessage(SendMessageRequest r) {
             sent.add(r);
-            return SendMessageResponse.builder().messageId("m").build();
+            return SendMessageResponse.builder().messageId("m-" + sent.size()).build();
         }
 
         @Override
         public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest r) {
             if (failReceive != null) throw failReceive;
+            receives.add(r);
             try {
                 Message first = waiting.poll(r.waitTimeSeconds(), TimeUnit.SECONDS);
                 List<Message> batch = new java.util.ArrayList<>();
@@ -148,11 +150,39 @@ class SqsTypeTest {
     }
 
     @Test
+    void aSendReturnsTheMessageIdAndAnArrivalCarriesItsAttributes() throws Exception {
+        FakeSqs sqs = new FakeSqs();
+        TransportType.Sender sender = SqsType.sender(sqs);
+        assertEquals("m-1", sender.sendForId("orders", "one", Map.of()), "the id in the service's answer");
+        assertEquals("m-2", sender.sendForId("orders", "two", Map.of()));
+        sender.send("orders", "three", Map.of());
+        assertEquals(3, sqs.sent.size(), "a plain send sends once");
+
+        FakeSqs receiving = new FakeSqs();
+        BlockingQueue<TransportType.Arrival> got = new LinkedBlockingQueue<>();
+        TransportType.Subscription subscription = SqsType.subscription(receiving, "orders", got::add, e -> { }, 1);
+        receiving.waiting.add(Message.builder().body("shipped").receiptHandle("r1").messageId("m-9").messageAttributes(Map.of(
+                "region", software.amazon.awssdk.services.sqs.model.MessageAttributeValue.builder().dataType("String").stringValue("EU").build(),
+                "parcels", software.amazon.awssdk.services.sqs.model.MessageAttributeValue.builder().dataType("Number").stringValue("3").build(),
+                "label", software.amazon.awssdk.services.sqs.model.MessageAttributeValue.builder().dataType("Binary")
+                        .binaryValue(software.amazon.awssdk.core.SdkBytes.fromUtf8String("café")).build())).build());
+        receiving.waiting.add(Message.builder().body("bare").receiptHandle("r2").build());
+
+        TransportType.Arrival first = got.poll(5, TimeUnit.SECONDS), second = got.poll(5, TimeUnit.SECONDS);
+        subscription.close();
+        assertEquals("shipped", first.body());
+        assertEquals(Map.of("region", "EU", "parcels", "3", "label", "café"), first.headers());
+        assertNull(first.correlationId(), "SQS has no correlation field");
+        assertEquals(Map.of(), second.headers());
+        assertTrue(receiving.receives.stream().allMatch(r -> r.messageAttributeNames().equals(List.of("All"))), "the service leaves attributes out unless they are asked for");
+    }
+
+    @Test
     void receivingHandsOnEachBodyDeletesItAndReportsAFailure() throws Exception {
         FakeSqs sqs = new FakeSqs();
         BlockingQueue<String> got = new LinkedBlockingQueue<>();
         BlockingQueue<Exception> errors = new LinkedBlockingQueue<>();
-        TransportType.Subscription subscription = SqsType.subscription(sqs, "orders", got::add, errors::add, 1);
+        TransportType.Subscription subscription = SqsType.subscription(sqs, "orders", a -> got.add(a.body()), errors::add, 1);
         sqs.waiting.add(Message.builder().body("one").receiptHandle("r1").build());
         sqs.waiting.add(Message.builder().body("two").receiptHandle("r2").build());
         assertEquals("one", got.poll(5, TimeUnit.SECONDS));
@@ -166,13 +196,13 @@ class SqsTypeTest {
 
         FakeSqs failing = new FakeSqs();
         failing.failReceive = (RuntimeException) SqsException.builder().message("Access to the resource is denied.").build();
-        TransportType.Subscription broken = SqsType.subscription(failing, "orders", got::add, errors::add, 1);
+        TransportType.Subscription broken = SqsType.subscription(failing, "orders", a -> got.add(a.body()), errors::add, 1);
         assertEquals("Access to the resource is denied.", errors.poll(5, TimeUnit.SECONDS).getMessage());
         assertThrows(SqsException.class, broken::check);
         broken.close();
 
         FakeSqs other = new FakeSqs();
-        assertThrows(QueueDoesNotExistException.class, () -> SqsType.subscription(other, "missing", got::add, errors::add, 1));
+        assertThrows(QueueDoesNotExistException.class, () -> SqsType.subscription(other, "missing", a -> got.add(a.body()), errors::add, 1));
         assertTrue(other.closed.get());
     }
 }

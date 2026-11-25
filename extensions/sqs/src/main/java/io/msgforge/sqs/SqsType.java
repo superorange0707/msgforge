@@ -3,6 +3,7 @@ package io.msgforge.sqs;
 import java.net.URI;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,7 +33,8 @@ import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 /**
  * Amazon SQS, or anything that answers its API (ElasticMQ, LocalStack). The destination is a queue name or a queue URL.
- * Headers become string message attributes. Receiving polls the queue and deletes what it receives.
+ * Headers become string message attributes, and an arrival carries its attributes as headers. Receiving polls the queue
+ * and deletes what it receives. A send returns the message id the service gave the message.
  */
 public class SqsType implements TransportType {
 
@@ -76,8 +78,8 @@ public class SqsType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String destination, Consumer<String> onMessage, Consumer<Exception> onError) {
-        return subscription(client(s), destination, onMessage, onError, 2);
+    public Subscription receive(Map<String, String> s, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) {
+        return subscription(client(s), destination, onArrival, onError, 2);
     }
 
     /**
@@ -150,7 +152,13 @@ public class SqsType implements TransportType {
         return new Sender() {
             @Override
             public void send(String destination, String body, Map<String, String> headers) {
-                sqs.sendMessage(request(queueUrl(sqs, destination, urls), body, headers));
+                sendForId(destination, body, headers);
+            }
+
+            /** The MessageId of the service's answer. SQS has no correlation field: a system that answers echoes this id in an attribute or in the body. */
+            @Override
+            public String sendForId(String destination, String body, Map<String, String> headers) {
+                return sqs.sendMessage(request(queueUrl(sqs, destination, urls), body, headers)).messageId();
             }
 
             /**
@@ -173,8 +181,18 @@ public class SqsType implements TransportType {
         };
     }
 
+    /** A message's attributes as text. A binary attribute is read as UTF-8, a number attribute is its digits as the service keeps them. */
+    static Map<String, String> headers(Message message) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        message.messageAttributes().forEach((name, value) -> {
+            String text = value.stringValue() != null ? value.stringValue() : value.binaryValue() != null ? value.binaryValue().asUtf8String() : null;
+            if (text != null) headers.put(name, text);
+        });
+        return headers;
+    }
+
     /** Takes over the client: it is polled on its own thread, and closed when the subscription closes. */
-    static Subscription subscription(SqsClient sqs, String destination, Consumer<String> onMessage, Consumer<Exception> onError, int waitSeconds) {
+    static Subscription subscription(SqsClient sqs, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError, int waitSeconds) {
         String url;
         try {
             url = queueUrl(sqs, destination, new HashMap<>());
@@ -187,9 +205,10 @@ public class SqsType implements TransportType {
         Thread thread = new Thread(() -> {
             try {
                 while (!closing.get()) {
-                    List<Message> messages = sqs.receiveMessage(r -> r.queueUrl(url).maxNumberOfMessages(10).waitTimeSeconds(waitSeconds)).messages();
+                    List<Message> messages = sqs.receiveMessage(r -> r.queueUrl(url).maxNumberOfMessages(10).waitTimeSeconds(waitSeconds)
+                            .messageAttributeNames("All")).messages();   // attributes only come when asked for
                     if (messages.isEmpty()) continue;
-                    messages.forEach(m -> onMessage.accept(m.body()));
+                    messages.forEach(m -> onArrival.accept(new Arrival(m.body(), headers(m), null)));
                     int[] n = {0};
                     sqs.deleteMessageBatch(r -> r.queueUrl(url).entries(messages.stream()
                             .map(m -> DeleteMessageBatchRequestEntry.builder().id(String.valueOf(n[0]++)).receiptHandle(m.receiptHandle()).build()).toList()));

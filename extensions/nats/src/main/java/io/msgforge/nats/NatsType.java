@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,7 +25,7 @@ import io.nats.client.impl.Headers;
 /**
  * NATS. The destination is a subject. Sending is a core publish, or a JetStream publish that waits for the stream's
  * acknowledgement. Headers become NATS headers. Receiving is a core subscription: every subscriber gets its own copy,
- * and nothing is taken from a stream or from anyone else.
+ * and nothing is taken from a stream or from anyone else. An arrival carries the message's headers.
  */
 public class NatsType implements TransportType {
 
@@ -67,9 +68,9 @@ public class NatsType implements TransportType {
     }
 
     @Override
-    public Subscription subscribe(Map<String, String> s, String subject, Consumer<String> onMessage, Consumer<Exception> onError) throws Exception {
+    public Subscription receive(Map<String, String> s, String subject, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
         Problems problems = new Problems(onError);
-        return subscription(Nats.connect(options(s, problems)), subject, onMessage, problems);
+        return subscription(Nats.connect(options(s, problems)), subject, onArrival, problems);
     }
 
     static Options options(Map<String, String> s, Problems problems) throws Exception {
@@ -136,6 +137,8 @@ public class NatsType implements TransportType {
     /** Takes over the connection and closes it with the sender. */
     static Sender sender(Connection nc, JetStream js, Problems problems) {
         return new Sender() {
+            // No sendForId: a core publish gets no id at all, and JetStream answers with the stream's sequence number,
+            // which a core subscriber never sees and so cannot echo. NATS has no correlation field either.
             // ponytail: each core publish is followed by a round trip, so a refusal the server reports is seen at
             // its message, and a dead connection at the first send. That caps throughput at a few thousand a second.
             @Override
@@ -172,10 +175,22 @@ public class NatsType implements TransportType {
         };
     }
 
+    /** A NATS header may have several values: they are joined with a comma, as HTTP does. A message without headers has none (null from the client). */
+    static Map<String, String> headers(Headers h) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (h == null) return headers;
+        for (String name : h.keySet()) {
+            List<String> values = h.get(name);
+            if (values != null && !values.isEmpty()) headers.put(name, String.join(",", values));
+        }
+        return headers;
+    }
+
     /** Takes over the connection and closes it with the subscription. */
-    static Subscription subscription(Connection nc, String subject, Consumer<String> onMessage, Problems problems) throws Exception {
+    static Subscription subscription(Connection nc, String subject, Consumer<Arrival> onArrival, Problems problems) throws Exception {
         try {
-            Dispatcher dispatcher = nc.createDispatcher(m -> onMessage.accept(new String(m.getData(), StandardCharsets.UTF_8)));
+            Dispatcher dispatcher = nc.createDispatcher(m -> onArrival.accept(
+                    new Arrival(m.getData() == null ? "" : new String(m.getData(), StandardCharsets.UTF_8), headers(m.getHeaders()), null)));
             dispatcher.subscribe(subject);
             // the server has the subscription before the run sends its first message
             nc.flush(Duration.ofSeconds(10));
