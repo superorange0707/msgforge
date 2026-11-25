@@ -70,11 +70,17 @@ public class Scenarios {
     }
 
     public Runs.View run(String id) {
+        return run(id, null, null);
+    }
+
+    /** count and rate, when given, replace the scenario's own for this run (the command line's --count and --rate). */
+    public Runs.View run(String id, Integer count, Double rate) {
         Scenario s;
         synchronized (this) {
             s = find(id);
         }
-        return runs.start(new Runs.Request(s.name(), s.parts(), s.targets(), s.mode(), s.count(), s.rate(), s.headers(),
+        return runs.start(new Runs.Request(s.name(), s.parts(), s.targets(), s.mode(), count != null ? count : s.count(),
+                rate != null ? rate : s.rate(), s.headers(),
                 null, null, null, null, null, null, null, s.timeoutSeconds(), s.match()));
     }
 

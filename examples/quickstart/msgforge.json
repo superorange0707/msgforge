@@ -1,0 +1,17 @@
+{
+  "connections": [
+    {"id": "kafka", "name": "Kafka", "type": "kafka", "settings": {"bootstrap": "kafka:9092"}, "destinations": ["demo.orders"]},
+    {"id": "dry-run", "name": "Dry run", "type": "dry-run", "settings": {}, "destinations": ["DEMO.QUEUE"]},
+    {"id": "mq", "name": "IBM MQ (profile ibm-mq)", "type": "ibm-mq",
+     "settings": {"hosts": "mq(1414)", "queueManager": "QM1", "channel": "DEV.APP.SVRCONN", "user": "app", "password": "${MSGFORGE_MQ_PASSWORD}"},
+     "destinations": ["DEV.QUEUE.1"]}
+  ],
+  "scenarios": [
+    {"id": "kafka-loop", "name": "Kafka loop", "count": 20, "rate": 10, "timeoutSeconds": 10, "mode": "spread",
+     "parts": [{"pack": "demo", "template": "order.json", "weight": 1, "expect": {"connection": "kafka", "destination": "demo.orders"}}],
+     "targets": [{"connection": "kafka", "destination": "demo.orders"}]},
+    {"id": "mq-loop", "name": "IBM MQ loop", "count": 20, "rate": 10, "timeoutSeconds": 10, "mode": "spread",
+     "parts": [{"pack": "demo", "template": "order.json", "weight": 1, "expect": {"connection": "mq", "destination": "DEV.QUEUE.1"}}],
+     "targets": [{"connection": "mq", "destination": "DEV.QUEUE.1"}]}
+  ]
+}

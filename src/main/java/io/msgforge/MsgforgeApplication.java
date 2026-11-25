@@ -14,10 +14,21 @@ public class MsgforgeApplication {
     static final String USAGE = """
             msgforge: a message simulator with a console in the browser.
 
-              bin/msgforge            start it, then open http://localhost:8585
-              bin/msgforge --help     this text
+              bin/msgforge                     start the console, then open http://localhost:8585
+              bin/msgforge run <scenario>      run a saved scenario (name or id) without the console, and exit
+              bin/msgforge list                list the saved scenarios
+              bin/msgforge --help              this text
 
-            Settings are environment variables (or --name=value arguments, shown in brackets):
+            run prints each check and exits 0 when the run passed (or had nothing to verify), 1 when a check
+            failed, 2 for anything else: no such scenario, a setting that is wrong, a run that failed.
+
+              --report <file>          also write the result as JUnit XML, for a CI system to show
+              --url http://host:port   run it on a msgforge that is already running, instead of here (also for list)
+              --count <n>              send this many messages instead of the scenario's number
+              --rate <r>               messages per second instead of the scenario's rate, 0 for as fast as possible
+
+            Settings are environment variables (or --name=value arguments, shown in brackets). run and list
+            read the same ones as the console, except PORT and SERVER_ADDRESS: they open no port.
 
               PORT                    port of the console, 8585                           [--server.port]
               SERVER_ADDRESS          address to listen on, 127.0.0.1                     [--server.address]
@@ -31,6 +42,9 @@ public class MsgforgeApplication {
             """;
 
     public static void main(String[] args) {
+        if (Cli.handles(args) && !Arrays.asList(args).contains("--help")) {
+            System.exit(Cli.main(args, System.out));
+        }
         for (String arg : args) {
             if (arg.equals("--help") || arg.equals("-h")) {
                 System.out.print(USAGE);
