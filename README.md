@@ -2,13 +2,13 @@
 
 A message simulator: write a template, press Send, and msgforge publishes as many generated messages as you ask for to a queue. Message formats live in files and everything else is set up in the console, so a new format, queue or broker is a few clicks, not a code change.
 
-It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and Kafka as a plugin. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
+It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka and RabbitMQ. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
 
 ![The msgforge console: a template with its preview, the send form, and two verified runs](docs/console.png)
 
 ## Run it
 
-From a release: unzip `msgforge-<version>.zip` and start it. The zip holds the application, the bundled packs and the Kafka plugin.
+From a release: unzip `msgforge-<version>.zip` and start it. The zip holds the application, the bundled packs and the plugins.
 
 ```bash
 msgforge-0.1.0/bin/msgforge
@@ -164,6 +164,15 @@ Create one connection per environment or queue manager and pick it from the Conn
 
 If the consumer is not a JMS application, use a destination like `queue:///MY.QUEUE?targetClient=1` so MQ leaves out the JMS header.
 
+### Plugin connection types
+
+The release carries these as plugins. Their settings, how headers map and how each one receives are in [docs/connections.md](docs/connections.md).
+
+| Type | Destination | Verified against |
+|---|---|---|
+| [Kafka](#the-kafka-plugin) | a topic | the client's mock producer and consumer only |
+| [RabbitMQ](docs/connections.md#rabbitmq) (AMQP 0-9-1) | a queue, or `exchange/routing-key` | RabbitMQ 4.4.1 |
+
 ## Running in a container
 
 ```bash
@@ -173,7 +182,7 @@ docker run -p 127.0.0.1:8585:8585 -v msgforge-data:/data msgforge
 
 `127.0.0.1:` keeps the port on this machine. Without it Docker publishes it on every network interface, and anyone on the network could use the saved connections.
 
-The image runs as a non-root user and keeps everything the console changes on the `/data` volume: `msgforge.json` and the packs in `/data/packs`. On a volume with no packs yet, the first start copies the bundled ones there, so they can be edited like any other; later starts, and newer images, leave that folder alone. The Kafka plugin is in `/app/plugins`.
+The image runs as a non-root user and keeps everything the console changes on the `/data` volume: `msgforge.json` and the packs in `/data/packs`. On a volume with no packs yet, the first start copies the bundled ones there, so they can be edited like any other; later starts, and newer images, leave that folder alone. The plugins are in `/app/plugins`.
 
 | Variable | Purpose | Default | In the image |
 |---|---|---|---|
@@ -210,6 +219,8 @@ The Headers box adds message properties, written like Overrides: `JMSCorrelation
 |---|---|
 | IBM MQ | a JMS string property; `JMSCorrelationID` and `JMSType` set the JMS header of that name |
 | HTTP | a request header |
+| Kafka | a record header; `key` sets the record key |
+| RabbitMQ | an entry in the headers table; `correlation_id`, `message_id`, `type` and the other AMQP property names set that property |
 
 ## Scenarios
 
@@ -252,6 +263,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 | Dry run | a loopback: what is sent to a destination is delivered to whoever listens on the same name, so a template that expects its own destination passes with no broker |
 | IBM MQ | consumes: every message on the expected queue is taken off it, including ones msgforge did not send. Expect on queues that nothing else reads. |
 | Kafka | reads the topic from its end with no consumer group, so other consumers are not affected. A topic the broker is still creating is waited for (5 seconds). On a broker that creates topics on demand, expecting a topic creates it: a mistyped topic name shows up as missing messages, not as "topic not found". |
+| RabbitMQ | from a queue it consumes, like IBM MQ. From `exchange/routing-key` it binds a temporary queue of its own and takes nothing from other consumers. |
 | HTTP | cannot receive |
 
 Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.
@@ -342,6 +354,12 @@ To let expectations use the type, also override `canReceive()` to return true an
 ```
 
 The API is tested through the started application with the Kafka plugin loaded from its built jar. The JMS path, sending and receiving, is tested against an embedded ActiveMQ Artemis broker. Kafka sending and receiving are tested against the client library's mock producer and consumer, not a broker; IBM MQ is not tested against a queue manager.
+
+The other plugins have unit tests with their client library mocked or an embedded broker, and tests against a real server that run only when an environment variable names one (they are skipped otherwise). Each test class says what it needs, for example:
+
+```bash
+MSGFORGE_IT_RABBITMQ=amqp://127.0.0.1:5672 MSGFORGE_IT_RABBITMQ_USER=… MSGFORGE_IT_RABBITMQ_PASSWORD=… ./gradlew :extensions:rabbitmq:test
+```
 
 `.github/workflows/ci.yml` runs the same command and is started by hand only.
 

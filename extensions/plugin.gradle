@@ -1,0 +1,43 @@
+// What every plugin in extensions/ except Kafka shares (Kafka's own build.gradle is the long form of the same).
+// A plugin's build.gradle applies the java and dependency-management plugins, imports the Spring Boot BOM,
+// lists its client library, and applies this file. The result is one jar that carries its client with it.
+
+group = 'io.msgforge'
+version = rootProject.version
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories { mavenCentral() }
+
+// TLS settings and their checks, compiled into each plugin: a plugin cannot use another plugin's classes.
+sourceSets.main.java.srcDir rootProject.file('extensions/shared')
+
+dependencies {
+    compileOnly project(':')                          // TransportType is provided by msgforge at run time
+    testImplementation project(':')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    // Tests against a real server run only when MSGFORGE_IT_<PLUGIN> names one; changing it reruns them.
+    inputs.property 'servers', System.getenv().findAll { it.key.startsWith('MSGFORGE_IT_') }.toString()
+}
+
+jar {
+    archiveBaseName = "msgforge-${project.name}"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(rootProject.file('THIRD-PARTY.md')) { into 'META-INF' }
+    doFirst { rootProject.bundledJars(configurations.runtimeClasspath) }
+    from({ configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/*.EC', 'module-info.class', 'META-INF/versions/*/module-info.class'
+    }
+}
+
+tasks.register('installPlugin', Copy) {
+    from jar
+    into rootProject.file('plugins')
+}

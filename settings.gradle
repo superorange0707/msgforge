@@ -4,4 +4,4 @@ plugins {
 }
 
 rootProject.name = 'msgforge'
-include 'extensions:kafka'
+include 'extensions:kafka', 'extensions:rabbitmq'

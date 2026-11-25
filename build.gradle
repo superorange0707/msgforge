@@ -55,13 +55,18 @@ ext.bundledJars = { Configuration classpath ->
     jars*.file
 }
 
-// What a release ships: one zip that works where it is unpacked, with the bundled packs and the Kafka plugin in place.
+// The plugins a release carries in plugins/, besides Kafka. Each is a project under extensions/.
+def bundledPlugins = ['rabbitmq']
+bundledPlugins.each { evaluationDependsOn(":extensions:${it}") }
+
+// What a release ships: one zip that works where it is unpacked, with the bundled packs and the plugins in place.
 //   ./gradlew dist   ->   build/distributions/msgforge-<version>.zip, started with bin/msgforge
 tasks.register('dist', Zip) {
     group = 'distribution'
-    description = 'Builds the release zip: the application, packs/, plugins/ with the Kafka plugin, and a start script.'
+    description = 'Builds the release zip: the application, packs/, plugins/ with the Kafka and other plugins, and a start script.'
     destinationDirectory = layout.buildDirectory.dir('distributions')
     dependsOn ':extensions:kafka:jar'
+    bundledPlugins.each { dependsOn ":extensions:${it}:jar" }
     into("msgforge-${version}") {
         from(bootJar) { rename { 'msgforge.jar' } }   // one name, so the start script and the Dockerfile need no version
         from('README.md', 'LICENSE', 'NOTICE', 'THIRD-PARTY.md')
@@ -80,6 +85,19 @@ tasks.register('dist', Zip) {
         from('docs') { into 'docs' }   // the README's screenshot
         from('packs') { into 'packs' }
         from("extensions/kafka/build/libs/msgforge-kafka-${version}.jar") { into 'plugins' }
+        bundledPlugins.each { pluginName ->
+            def plugin = project(":extensions:${pluginName}")
+            from(plugin.tasks.named('jar')) { into 'plugins' }
+            // the licence and notice files of the jars inside the plugin, one folder per jar as for the application
+            bundledJars(plugin.configurations.runtimeClasspath).each { jar ->
+                from(zipTree(jar)) {
+                    include 'META-INF/LICENSE*', 'META-INF/license*', 'META-INF/NOTICE*', 'META-INF/notice*', 'META-INF/*LICENSE',
+                            'LICENSE*', 'NOTICE*', 'about.html', 'notice.html', 'epl-v*.html', 'edl-v*.html'
+                    eachFile { path = "msgforge-${version}/licenses/${jar.name - '.jar'}/${name}" }
+                    includeEmptyDirs = false
+                }
+            }
+        }
         from('src/dist/bin') {
             into 'bin'
             filePermissions { unix('rwxr-xr-x') }

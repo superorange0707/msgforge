@@ -33,6 +33,12 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 | `snappy-java` | snappy-java | Apache-2.0, notice below; includes Snappy (BSD 3-Clause, text below) |
 | `zstd-jni` | zstd-jni | BSD 2-Clause, text below; includes Zstandard (BSD 3-Clause, text below) |
 
+## In the RabbitMQ plugin (`plugins/msgforge-rabbitmq-*.jar`)
+
+| Jars | Project | Licence |
+|---|---|---|
+| `amqp-client` | RabbitMQ Java client | Apache-2.0, MPL-2.0 or GPL-2.0; carried here under the Apache License 2.0 |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.
