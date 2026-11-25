@@ -347,7 +347,7 @@ public class Reports {
             .chip.CANCELLED{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
             .sub{color:var(--muted);margin:0 0 22px;font-variant-numeric:tabular-nums}
             .error{margin:0 0 20px;padding:10px 14px;border-radius:10px;border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent);color:var(--bad);overflow-wrap:anywhere}
-            .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-bottom:20px}
+            .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
             .tile,section{background:var(--card);border:1px solid var(--line);border-radius:12px}
             .tile{padding:12px 14px}.tile b{display:block;font-size:22px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
             .tile span{color:var(--muted);font-size:12px}.tile.bad b{color:var(--bad)}.tile.ok b{color:var(--ok)}

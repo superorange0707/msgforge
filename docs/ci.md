@@ -5,8 +5,8 @@ A scenario saved in the console can be run by a pipeline with `msgforge run`. It
 | Exit code | When |
 |---|---|
 | `0` | the run passed, or it had nothing to verify and finished |
-| `1` | it finished and a check failed (`FAIL`) |
-| `2` | anything else: no such scenario, a setting or `msgforge.json` that is wrong, a run that failed (a broker that is down) or was cancelled in the console, Java missing |
+| `1` | it finished and a check failed, or some of its sends failed (`FAIL`) |
+| `2` | anything else: no such scenario, a setting or `msgforge.json` that is wrong, a run that failed (a broker that is down, or one that refused every send) or was cancelled in the console, Java missing |
 
 When the pipeline itself stops msgforge (a cancelled job), the process ends with the signal's code, 130 or 143, and writes no report.
 
@@ -26,6 +26,10 @@ Report written to /home/ci/work/build/msgforge.xml
 | `--report <file>` | JUnit XML: one test suite per run, one test case per check, named `template → connection / destination`. A failed check is a `<failure>` with the arrived, misrouted and missing counts. A run without checks is one test case named after the scenario; a run that could not start or did not finish is one `<error>`. A relative path is taken from the folder you started `bin/msgforge` in. |
 | `--url http://host:port` | run the scenario on a msgforge that is already running, instead of in this process. See [below](#a-deployed-msgforge). |
 | `--count <n>`, `--rate <r>` | this many messages, at this many per second (0: as fast as possible), instead of the scenario's own numbers |
+| `--duration <s>`, `--ramp-up <s>` | stop sending after this many seconds (with a count: whichever comes first), and reach the rate in a straight line over this many |
+| `--senders <n>` | send from this many connections at once; 0 adds them while the run falls behind |
+| `--invalid <percent>`, `--seed <n>` | make this share of the messages invalid on purpose, and repeat the bodies and faults of the run that printed this seed |
+| `--save <folder>` | also write the run's report there as `msgforge-<run>.html`, `.json`, `.csv` and `.series.csv` |
 
 The scenario is named by its id or by its name; `bin/msgforge list` shows both. A name that two scenarios share has to be given as an id.
 
@@ -104,13 +108,13 @@ bin/msgforge run "Order routing" --url https://msgforge.test.example --report bu
 bin/msgforge list --url https://msgforge.test.example
 ```
 
-The scenario, its connections and its packs are the server's. The run is started through the API (`POST /api/runs`, with `--count` and `--rate` applied), followed until it ends, and judged with the same exit codes. If the pipeline is cancelled while the run is going, the run on the server is cancelled too. msgforge answers only to host names in its `MSGFORGE_ALLOWED_HOSTS`; another name gets `answered 403` and exit code 2. A proxy that asks for a login in front of msgforge (see [deploy.md](deploy.md)) has to let the pipeline through, for example on an internal address with its own host name; `--url` sends no credentials.
+The scenario, its connections and its packs are the server's. The run is started through the API (`POST /api/runs`, with the options applied), followed until it ends, and judged with the same exit codes. If the pipeline is cancelled while the run is going, the run on the server is cancelled too. msgforge answers only to host names in its `MSGFORGE_ALLOWED_HOSTS`; another name gets `answered 403` and exit code 2. A proxy that asks for a login in front of msgforge (see [deploy.md](deploy.md)) has to let the pipeline through, for example on an internal address with its own host name; `--url` sends no credentials.
 
 The server keeps the 20 most recent finished runs. On a busy shared server where more than 20 other runs end while a pipeline follows one, the pipeline loses sight of it and exits 2.
 
 ## What has been checked
 
-- Exit codes 0, 1 and 2 and the JUnit content, locally and with `--url`: automated tests (`CliTest`) with Dry run scenarios.
+- Exit codes 0, 1 and 2 and the JUnit content, locally and with `--url`: automated tests (`CliTest`) with Dry run scenarios. The load options and `--save` are covered the same way.
 - The release zip's `bin/msgforge run … --report` from another folder, and `--url` against the quick start: by hand, on macOS.
 - The "Shell, with Docker" commands: run as written against the quick start on Docker Desktop (arm64), exit code 0, report written.
 - The GitHub Actions workflow above has **not** been run on GitHub, nor anything on GitLab or Jenkins. Its steps are the shell commands above. On a Linux runner the `chmod a+w` matters, Docker Desktop does not show that.

@@ -2,7 +2,7 @@
 
 A message simulator: write a template, press Send, and msgforge publishes as many generated messages as you ask for to a queue. Message formats live in files and everything else is set up in the console, so a new format, queue or broker is a few clicks, not a code change.
 
-It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ, MQTT, AMQP 1.0, Amazon SQS and NATS. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
+It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ, MQTT, AMQP 1.0, Amazon SQS and NATS. It can also listen where the messages should end up and tell you whether they got there, and run as a load test: a rate that ramps up, several senders, a share of messages made invalid on purpose, a reject queue watched and sorted by reason, and a report at the end. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
 
 ![The msgforge console: a template with its preview, the send form, and two verified runs](docs/console.png)
 
@@ -50,6 +50,12 @@ The console has no login. It listens on 127.0.0.1 only, and it answers only requ
 | Templates | + on a pack to create, the editor to change, the bin to delete |
 | Templates from files | the upload arrow on a pack, or drop message files anywhere on the page; what should differ per message is marked for you |
 | Scenarios (saved runs) | the bookmark next to Send, or + on Scenarios in the sidebar |
+| Ramp-up, duration, senders, seed | Load in the send form, or the scenario dialog |
+| Invalid messages | Invalid in the send form, or the slider in the scenario dialog |
+| A message exactly as typed | Raw in the editor's toolbar |
+| Watching a reject or dead-letter queue | Watch in the scenario dialog, or + on Monitors in the sidebar |
+| A run's numbers, chart and reports | click the run's name |
+| Saved reports | the archive button at the bottom of the sidebar |
 
 Connections and scenarios are saved to `msgforge.json`, packs to the `packs/` folder. Both are plain files you can copy to another machine.
 
@@ -208,6 +214,8 @@ The image runs as a non-root user and keeps everything the console changes on th
 | `MSGFORGE_CONFIG` | where connections and scenarios are saved | `msgforge.json` | `/data/msgforge.json` |
 | `MSGFORGE_PLUGINS` | folder of plugin jars | `plugins` | |
 | `MSGFORGE_ENV_ALLOW` | environment variables a connection may name besides `MSGFORGE_*`, for example `MQ_*,KAFKA_*` | none | |
+| `MSGFORGE_REPORTS` | a folder: every run that ends is saved there as HTML, JSON and CSV | none | `/data/reports` |
+| `MSGFORGE_REPORTS_KEEP` | how many runs that folder keeps; older ones are removed | `50` | |
 | `MSGFORGE_ALLOWED_HOSTS` | host names the console answers to besides `localhost`, comma-separated; `*` for any | none | |
 
 With the port published as above the console is at http://localhost:8585, for you only. Reached under any other name, for example `msgforge.internal` behind a proxy, it answers 403 until that name is in `MSGFORGE_ALLOWED_HOSTS`. The proxy has to pass the original `Host` header on: a write is accepted only when the browser's `Origin` matches it. `*` turns the host check off, which is only safe where nothing untrusted can reach the port.
@@ -255,6 +263,18 @@ A scenario refers to template files, so save a template before saving a scenario
 
 The console keeps the last 20 runs that have ended, and every run that is still going. Cancelling stops a run at once when it is waiting, between messages or for arrivals; a message that is already on its way to the broker is finished first. Each run opens its own connections and closes them when it ends, and stopping msgforge cancels the runs in progress first.
 
+## Load runs
+
+![A load run in the console: sent, failed and invalid counts, send times, the rate over time against its target, arrivals per template with rejects as expected, and the reject queue sorted by reason](docs/load.png)
+
+A run can ramp up to its rate, run for a time instead of a count, send from several connections at once, and go on until it is stopped. A send that fails no longer ends it: the failure is counted with its error and the run goes on, until the connection is plainly gone (100 sends in a row failed, or every send failed for 10 seconds, or nothing went out at all). While it runs, and afterwards, clicking its name shows the target and actual rate, sent, failed and invalid counts, the send times (p50, p95, p99) and a chart over time.
+
+A share of the messages can be made invalid on purpose (empty, garbage, cut off, a field removed, a value of the wrong type), with a seed that makes the run repeatable. A run that verifies knows the difference: invalid messages are expected on the destination you name for them, or nowhere, and the result says how many were rejected as expected, accepted although invalid, or valid but rejected. Further destinations can be watched and what arrives there sorted into buckets by a JSON pointer, a regular expression or a header; a monitor does the same outside a run.
+
+Every run can be downloaded as HTML, JSON and CSV, saved to a folder automatically, and `GET /metrics` gives Prometheus the totals. [docs/load.md](docs/load.md) has all of it: the settings, the rules, the limits, a complete scenario, and what was tested and what was not.
+
+To try it with nothing else running, give the Dry run connection the Route `ORDERS.IN > ORDERS.OUT, invalid > ORDERS.REJECTED`: it then stands in for a system that forwards well-formed messages and rejects the rest.
+
 ## Verifying what arrives
 
 Sending answers "did the messages go out". An expectation answers "did the system under test do the right thing with them": it says where one template's messages should arrive, msgforge listens there, and the run ends with a verdict.
@@ -268,7 +288,7 @@ The case it is built for is a router that reads one queue and forwards each mess
 | Timeout | how long to wait after the last send, 10 seconds unless set (1 to 600). The run ends sooner once everything has arrived somewhere. |
 | Size | a run with expectations sends at most 20,000 messages |
 
-A message is recognised when an arriving body contains its token: the first `{{uuid}}` or `{{id}}` value in the body it was sent with. A template made from a real message usually has one already: import puts `{{uuid}}` or `{{id}}` where the sample had an id. If the template has neither, or the system under test rewrites that value, set a match expression. It is rendered like a header, so `{{ref}}` repeats what the body generated with `{{ref=digits 12}}`. The send form and the scenario dialog both have a Match field.
+A message is recognised when an arriving body or one of its headers contains its token (or, failing that, when the arrival's correlation id is the id the transport gave the message; see [docs/load.md](docs/load.md#how-an-arrival-is-recognised)). The token is the first `{{uuid}}` or `{{id}}` value in the body it was sent with. A template made from a real message usually has one already: import puts `{{uuid}}` or `{{id}}` where the sample had an id. If the template has neither, or the system under test rewrites that value, set a match expression. It is rendered like a header, so `{{ref}}` repeats what the body generated with `{{ref=digits 12}}`. The send form and the scenario dialog both have a Match field.
 
 What makes a good token:
 
@@ -281,7 +301,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 
 | Connection type | Receiving |
 |---|---|
-| Dry run | a loopback: what is sent to a destination is delivered to whoever listens on the same name, so a template that expects its own destination passes with no broker |
+| Dry run | a loopback: what is sent to a destination is delivered to whoever listens on the same name, so a template that expects its own destination passes with no broker. With a Route it delivers elsewhere, and rejects what is not well-formed. |
 | IBM MQ | consumes: every message on the expected queue is taken off it, including ones msgforge did not send. Expect on queues that nothing else reads. |
 | Kafka | reads the topic from its end with no consumer group, so other consumers are not affected. A topic the broker is still creating is waited for (5 seconds). On a broker that creates topics on demand, expecting a topic creates it: a mistyped topic name shows up as missing messages, not as "topic not found". |
 | RabbitMQ | from a queue it consumes, like IBM MQ. From `exchange/routing-key` it binds a temporary queue of its own and takes nothing from other consumers. |
@@ -303,7 +323,7 @@ bin/msgforge run "Order routing" --report build/msgforge.xml   # by name or id
 bin/msgforge list
 ```
 
-It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify), `1` when a check failed and `2` for anything else. `--report` writes JUnit XML, `--count` and `--rate` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
+It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify), `1` when a check failed and `2` for anything else. `--report` writes JUnit XML, `--save <folder>` writes the run's report as HTML, JSON and CSV, `--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
 
 ## Extending msgforge
 
@@ -355,7 +375,11 @@ curl -X POST localhost:8585/api/runs -H 'content-type: application/json' \
 
 To verify arrivals, add `"expect":{"connection":"…","destination":"…"}` to the run or to any of its parts, and optionally `"timeoutSeconds":10` and `"match":"{{ref}}"`. The run then goes `RUNNING`, `VERIFYING`, `DONE`, and carries a `verdict` (`PASS` or `FAIL`; null until it ends, and for a run that ends `FAILED` or `CANCELLED`) and `checks`, one per expecting part: `template`, `expected`, `sent`, `arrived`, `misrouted`, `missing`, `medianMs`, `maxMs`.
 
-Runs: `POST /api/runs`, `GET /api/runs`, `DELETE /api/runs/{id}` (cancels, also while verifying).
+A load run adds `"load":{"rampUpSeconds":…,"durationSeconds":…,"senders":…,"unlimited":…}`, `"invalid":{"percent":…,"kinds":[…],"expect":{…}}`, `"seed"`, `"watches":[{"connection":"…","destination":"…","buckets":[{"pointer":"/reason"}]}]` and `"raw":true`; `count` may then be 0. Each run in the list carries `failed`, `invalid`, `targetRate`, `actualRate`, `elapsedMs`, `latency`, `errors`, `seed` and `watched`, and a check also has `invalid`, `rejected` and `accepted`. [docs/load.md](docs/load.md) explains them.
+
+Runs: `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}` (one run with its series over time and watched destinations), `GET /api/runs/{id}/report?format=html|json|csv|series`, `DELETE /api/runs/{id}` (cancels, also while verifying).
+Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `DELETE /api/monitors/{id}`.
+Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.
 Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `GET /api/types` (each with `canReceive`).
@@ -382,7 +406,9 @@ class AmqpType implements TransportType {
 
 `open` is called for every run and every connection test, and the sender is closed when that run or test ends. `extensions/kafka` is a complete type to copy from. The other plugins in `extensions/` share a build script, `extensions/plugin.gradle`, and the TLS settings and URI checks in `extensions/shared`, which is compiled into each of their jars.
 
-To let expectations use the type, also override `canReceive()` to return true and `subscribe(settings, destination, onMessage, onError)` to hand each arriving body to `onMessage` until the returned subscription is closed. Call `onError` if receiving breaks after `subscribe` has returned, so the run fails instead of counting messages as missing.
+To let expectations use the type, also override `canReceive()` to return true and `receive(settings, destination, onArrival, onError)` to hand each arriving message to `onArrival` as an `Arrival(body, headers, correlationId)` until the returned subscription is closed. Call `onError` if receiving breaks after `receive` has returned, so the run fails instead of counting messages as missing. A type written before arrivals had headers overrides `subscribe(settings, destination, onMessage, onError)` instead, which hands over bodies only; it still compiles and works, and its arrivals are matched by their body alone.
+
+If the transport gives each message an id, override the sender's `sendForId` to return it. A run then recognises a reply that carries that id as its correlation id, which is how a reject of an emptied message is matched.
 
 ## Tests
 
@@ -390,7 +416,7 @@ To let expectations use the type, also override `canReceive()` to return true an
 ./gradlew test
 ```
 
-The API is tested through the started application with the Kafka plugin loaded from its built jar. The JMS path, sending and receiving, is tested against an embedded ActiveMQ Artemis broker. Kafka sending and receiving are tested against the client library's mock producer and consumer, not a broker; IBM MQ is not tested against a queue manager.
+The API is tested through the started application with the Kafka plugin loaded from its built jar. Load plans, invalid messages, watched destinations, monitors, reports and metrics are tested on Dry run and with fakes (`LoadTest`); what that covers and what it does not is listed in [docs/load.md](docs/load.md#tested-and-not-tested). The JMS path, sending and receiving, is tested against an embedded ActiveMQ Artemis broker. Kafka sending and receiving are tested against the client library's mock producer and consumer, not a broker; IBM MQ is not tested against a queue manager.
 
 The other plugins have unit tests with their client library mocked or an embedded broker, and tests against a real server that run only when an environment variable names one (they are skipped otherwise). Each test class says what it needs, for example:
 
