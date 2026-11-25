@@ -9,7 +9,8 @@ COPY . .
 RUN ./gradlew --no-daemon dist \
  && mkdir /out && cd /out \
  && jar xf /src/build/distributions/msgforge-*.zip \
- && mv msgforge-* msgforge
+ && mv msgforge-* msgforge \
+ && chmod +x msgforge/bin/msgforge   # jar xf does not keep file modes
 
 FROM eclipse-temurin:17-jre
 RUN groupadd --system --gid 10001 msgforge \

@@ -38,6 +38,12 @@ services:
       - data:/data
     environment:
       MSGFORGE_MQ_PASSWORD: ${MQ_APP_PASSWORD:-}
+    healthcheck:
+      # so that `docker compose up --wait` returns once the console answers
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "http://localhost:8585/api/types"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
     depends_on:
       kafka:
         condition: service_healthy
