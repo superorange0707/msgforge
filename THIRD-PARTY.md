@@ -68,6 +68,18 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 | `bcprov-lts8on` | Bouncy Castle (used by the client for NKey signatures) | Bouncy Castle Licence (MIT), text below |
 | `jspecify` | JSpecify annotations | Apache-2.0 |
 
+## In the Apache Pulsar plugin (`extensions/pulsar`, not in the release)
+
+The release does not carry this plugin; `./gradlew :extensions:pulsar:installPlugin` builds it. It is named here because the build checks every plugin jar it makes.
+
+| Jars | Project | Licence |
+|---|---|---|
+| `pulsar-client`, `pulsar-client-api`, `pulsar-client-admin-api` | Apache Pulsar | Apache-2.0. `pulsar-client` is a shaded jar: it also contains, renamed, Netty (with netty-tcnative and BoringSSL native libraries), Guava, Jackson, Gson, Caffeine, RE2/J, fastutil, DataSketches, aircompressor, Swagger annotations, JavaBeans Activation and others, and carries none of their licence or notice files. Their terms have not been reviewed here. |
+| `bcprov-jdk18on`, `bcpkix-jdk18on`, `bcutil-jdk18on` | Bouncy Castle | Bouncy Castle Licence (MIT), text below |
+| `opentelemetry-api`, `opentelemetry-api-incubator`, `opentelemetry-common`, `opentelemetry-context` | OpenTelemetry Java | Apache-2.0 |
+| `validation-api` | Bean Validation API | Apache-2.0 |
+| `jackson-annotations` | Jackson | Apache-2.0 |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.

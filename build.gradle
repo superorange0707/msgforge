@@ -95,6 +95,7 @@ tasks.register('dist', Zip) {
                             'LICENSE*', 'NOTICE*', 'about.html', 'notice.html', 'epl-v*.html', 'edl-v*.html'
                     eachFile { path = "msgforge-${version}/licenses/${jar.name - '.jar'}/${name}" }
                     includeEmptyDirs = false
+                    duplicatesStrategy = DuplicatesStrategy.EXCLUDE   // a jar the application or another plugin carries too
                 }
             }
         }

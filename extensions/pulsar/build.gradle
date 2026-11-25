@@ -1,0 +1,25 @@
+// Apache Pulsar as a msgforge plugin. `./gradlew :extensions:pulsar:installPlugin` puts it in plugins/.
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+// Spring Boot's BOM, as for the other plugins, then the versions the Pulsar client was built with: imported later, they win.
+dependencyManagement {
+    imports {
+        mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+        mavenBom 'org.apache.pulsar:pulsar-bom:4.0.11'
+        mavenBom 'io.opentelemetry:opentelemetry-bom:1.56.0'
+    }
+}
+
+apply from: rootProject.file('extensions/plugin.gradle')
+
+dependencies {
+    implementation('org.apache.pulsar:pulsar-client') {
+        exclude group: 'org.slf4j'                    // logging goes through msgforge's own slf4j
+        // a second copy of Bouncy Castle, packed as jars inside a jar; the plain jars next to it are enough
+        exclude group: 'org.apache.pulsar', module: 'bouncy-castle-bc'
+    }
+    testImplementation 'org.mockito:mockito-core'
+}

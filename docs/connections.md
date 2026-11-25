@@ -120,3 +120,28 @@ With TLS the server's certificate and host name are checked.
 Test connection logs in and makes one PING round trip.
 
 Verified against NATS Server 2.15.3 (the `nats:2` image): core sending and receiving with headers, another subscriber still getting its copy, refused publish and subscription, a refused login, JetStream publishing with and without a stream, TLS with a PEM CA file and a client certificate, the host name check. Token and credentials-file logins and WebSocket were not tried.
+
+## Apache Pulsar
+
+Through the Apache Pulsar Java client. **Not in the release zip**: the client is a 38 MB shaded jar that carries some twenty other libraries without their licence files, and they have not been reviewed. To use it, build it and put it in `plugins/`:
+
+```bash
+./gradlew :extensions:pulsar:installPlugin
+```
+
+| Setting | Notes |
+|---|---|
+| Service URL | `pulsar://host:6650`, `pulsar+ssl://host:6651` for TLS, or the HTTP(S) service URL. Several brokers: `pulsar://a:6650,b:6650`. |
+| Token | a JWT for token authentication. Other Pulsar authentication methods (OAuth 2, Athenz, a client certificate as identity) are not offered. |
+
+TLS: with a client key store, the trust store has to be a JKS or PKCS12 store as well; with only a trust store it may also be a PEM file.
+
+The destination is a topic (`orders`, or in full `persistent://tenant/namespace/orders`). A broker that creates topics on demand creates it at the first message. Each send waits for the broker to store the message.
+
+A header named `key` becomes the message key, as for Kafka; every other header becomes a message property.
+
+Receiving reads the topic from its end with a reader: a non-durable subscription that keeps nothing for later and shares out nothing, so durable subscriptions of the system under test are not affected. A topic with partitions is read on all of them. A reader that fails while a run verifies fails the run.
+
+Test connection asks the broker for the partitions of a topic named `msgforge-connection-check` without creating it; "no such topic" (the usual answer) and "not authorised" both prove the broker accepted the client.
+
+Verified against Pulsar 4.0.11 standalone (the `apachepulsar/pulsar:4.0.11` image): key and properties, a durable subscription still holding what the reader saw, TLS with a client certificate, a missing client certificate, the JVM's default trust, a broker certificate for another host name refused, an unreachable broker. Token authentication and partitioned topics were not tried.

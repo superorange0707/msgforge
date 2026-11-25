@@ -176,6 +176,7 @@ The release carries these as plugins. Their settings, how headers map and how ea
 | [AMQP 1.0](docs/connections.md#amqp-10) (ActiveMQ Artemis, ActiveMQ, Azure Service Bus, Solace, RabbitMQ 4…) | a queue address | RabbitMQ 4.4.1; ActiveMQ Artemis 2.40 embedded in the tests |
 | [Amazon SQS](docs/connections.md#amazon-sqs) (and ElasticMQ, LocalStack) | a queue name or URL | ElasticMQ 1.7.1 only, not AWS |
 | [NATS](docs/connections.md#nats) (core, JetStream publishing) | a subject | NATS Server 2.15.3 |
+| [Apache Pulsar](docs/connections.md#apache-pulsar), not in the release zip: `./gradlew :extensions:pulsar:installPlugin` | a topic | Pulsar 4.0.11 |
 
 ## Running in a container
 
@@ -229,6 +230,7 @@ The Headers box adds message properties, written like Overrides: `JMSCorrelation
 | AMQP 1.0 | an application property; `JMSCorrelationID` sets the correlation id and `JMSType` the subject |
 | Amazon SQS | a `String` message attribute (at most 10); `MessageGroupId` and `MessageDeduplicationId` set those parameters |
 | NATS | a NATS header |
+| Apache Pulsar | a message property; `key` sets the message key |
 
 ## Scenarios
 
@@ -276,6 +278,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 | AMQP 1.0 | consumes, like IBM MQ. Expect on queues that nothing else reads. |
 | Amazon SQS | polls and deletes what it receives: it consumes, and competes with other consumers of the queue |
 | NATS | a core subscription: a copy of each message, nothing taken from streams or other subscribers. Wildcards work. |
+| Apache Pulsar | reads the topic from its end with a reader (no durable subscription), so other subscriptions are not affected |
 | HTTP | cannot receive |
 
 Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.
