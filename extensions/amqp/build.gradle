@@ -1,0 +1,31 @@
+// AMQP 1.0 as a msgforge plugin, through Apache Qpid JMS. `./gradlew :extensions:amqp:installPlugin` puts it in plugins/.
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+    imports { mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES }
+}
+
+apply from: rootProject.file('extensions/plugin.gradle')
+
+dependencies {
+    implementation('org.apache.qpid:qpid-jms-client:2.11.0') {
+        exclude group: 'org.slf4j'                    // logging goes through msgforge's own slf4j
+        exclude group: 'jakarta.jms'                  // the JMS API is msgforge's, shared with its JMS sender and receiver
+        // ponytail: Netty's native transports are left out; the client uses Java NIO, which is plenty for a simulator
+        exclude group: 'io.netty', module: 'netty-transport-native-epoll'
+        exclude group: 'io.netty', module: 'netty-transport-native-kqueue'
+        exclude group: 'io.netty', module: 'netty-transport-native-io_uring'
+        exclude group: 'io.netty', module: 'netty-transport-classes-epoll'
+        exclude group: 'io.netty', module: 'netty-transport-classes-kqueue'
+        exclude group: 'io.netty', module: 'netty-transport-classes-io_uring'
+        exclude group: 'io.netty.incubator'
+    }
+
+    compileOnly 'jakarta.jms:jakarta.jms-api'          // provided by msgforge at run time, like TransportType
+    testImplementation 'jakarta.jms:jakarta.jms-api'
+    testImplementation 'org.apache.activemq:artemis-server'
+    testImplementation 'org.apache.activemq:artemis-amqp-protocol'
+}

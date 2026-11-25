@@ -52,3 +52,22 @@ Receiving subscribes with a clean session that ends with the connection. Every s
 Test connection logs in and makes one round trip (an UNSUBSCRIBE of `msgforge/check`, which every server answers and which changes nothing).
 
 Verified against Eclipse Mosquitto 2.1.4 (the `eclipse-mosquitto:2` image) with both versions: sending and receiving with wildcards, a refused login, a refused MQTT 5 publish, TLS with a PEM CA file and a client certificate, the host name check. The unit tests use an embedded ActiveMQ Artemis 2.40 broker with both versions; they check that headers arrive as user properties and that a broker that stops fails a receiver. Retain is passed to the client as it is and not tested.
+
+## AMQP 1.0
+
+Any broker that speaks AMQP 1.0, through Apache Qpid JMS: ActiveMQ Artemis, ActiveMQ, Azure Service Bus, Solace, RabbitMQ 4 and others. Sending and receiving use the same JMS code as IBM MQ.
+
+| Setting | Notes |
+|---|---|
+| Broker URI | `amqp://host:5672`, `amqps://host:5671` for TLS, `amqpws://` / `amqpwss://` over WebSocket, or a Qpid JMS `failover:(amqps://a:5671,amqps://b:5671)` list. Other Qpid JMS URI options may be added (`?amqp.idleTimeout=…`), except ones that carry a password or turn certificate checks off. |
+| User, Password | the SASL login. For Azure Service Bus: the shared access policy name and its key. |
+
+The destination is the address of a queue, written as the broker names it: `orders` on ActiveMQ Artemis and ActiveMQ, the queue or topic name on Azure Service Bus (a subscription is received as `topic/Subscriptions/name`), `/queues/orders` on RabbitMQ 4. ActiveMQ Artemis sends to the address as an anycast (queue) address; topics as such (`session.createTopic`) are not offered.
+
+Each send waits for the broker to accept the message, so an address the broker refuses fails the run at that message.
+
+Headers become JMS string properties, which Qpid JMS sends as AMQP application properties. `JMSCorrelationID` sets the AMQP `correlation-id`, and `JMSType` the `subject`. A property name has to be a Java identifier (letters, digits, `_`, `$`); another name fails the send.
+
+Receiving consumes, like IBM MQ: every message on the queue is taken off it, including ones msgforge did not send. Expect on queues that nothing else reads. A connection that breaks while a run verifies fails the run. With a `failover:` URI the client reconnects instead, and messages that arrive meanwhile can be missed.
+
+Verified against RabbitMQ 4.4.1 (its built-in AMQP 1.0, the `rabbitmq:4` image): sending and receiving on `/queues/…` addresses, an unknown address refused at the send, a refused login, TLS with a PEM CA file and a client certificate, the host name check. The unit tests use an embedded ActiveMQ Artemis 2.40 broker with a login: properties and correlation id arrive, a wrong password is refused, a broker that stops fails a receiver. Not tried against ActiveMQ Classic, Azure Service Bus or Solace.

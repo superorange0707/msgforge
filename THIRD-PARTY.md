@@ -45,6 +45,13 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 |---|---|---|
 | `org.eclipse.paho.client.mqttv3`, `org.eclipse.paho.mqttv5.client` | Eclipse Paho Java client | EPL-2.0. Source code: <https://github.com/eclipse/paho.mqtt.java> |
 
+## In the AMQP 1.0 plugin (`plugins/msgforge-amqp-*.jar`)
+
+| Jars | Project | Licence |
+|---|---|---|
+| `qpid-jms-client`, `proton-j` | Apache Qpid JMS, Apache Qpid Proton-J | Apache-2.0 |
+| `netty-buffer`, `netty-codec`, `netty-codec-http`, `netty-common`, `netty-handler`, `netty-resolver`, `netty-transport`, `netty-transport-native-unix-common` | Netty | Apache-2.0 |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.

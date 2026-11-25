@@ -113,9 +113,12 @@ public final class Tls {
         if (uri.getScheme() == null || java.util.Arrays.stream(schemes).noneMatch(uri.getScheme().toLowerCase(Locale.ROOT)::equals)) {
             throw new IllegalArgumentException(label + " must start with " + String.join("://, ", schemes) + "://");
         }
-        if (uri.getRawUserInfo() != null) throw new IllegalArgumentException("Put the user and password in their own fields, not in " + label);
-        String query = uri.getRawQuery() == null ? "" : uri.getRawQuery().toLowerCase(Locale.ROOT);
-        if (query.contains("trustall") || query.contains("verifyhost")) {
+        // the whole text, not the parsed parts: a failover:(…) URI is opaque and its options are not a query
+        String text = value.toLowerCase(Locale.ROOT);
+        if (uri.getRawUserInfo() != null || text.contains("password=")) {
+            throw new IllegalArgumentException("Put the user and password in their own fields, not in " + label);
+        }
+        if (text.contains("trustall") || text.contains("verifyhost") || text.contains("insecure")) {
             throw new IllegalArgumentException(label + " may not change certificate checks; set Trust store file instead");
         }
         return uri;
