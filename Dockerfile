@@ -28,5 +28,7 @@ VOLUME /data
 EXPOSE 8585
 USER msgforge
 # On a volume that has no packs yet, start it off with the bundled ones: copies there can be edited and deleted,
-# and survive a new image. Later starts leave the folder alone. Arguments to `docker run` go to msgforge.
-ENTRYPOINT ["sh", "-c", "[ -e /data/packs ] || cp -R /app/packs /data/packs; exec java -jar msgforge.jar \"$@\"", "msgforge"]
+# and survive a new image. Likewise /app/msgforge.json, when an image built on this one (or a mounted file) puts one
+# there, becomes the first /data/msgforge.json. Later starts leave both alone. Arguments to `docker run` go to msgforge:
+# `docker run … msgforge run <scenario>` runs a scenario and exits.
+ENTRYPOINT ["sh", "-c", "[ -e /data/packs ] || cp -R /app/packs /data/packs; [ -e /data/msgforge.json ] || [ ! -e /app/msgforge.json ] || cp /app/msgforge.json /data/msgforge.json; exec java -jar msgforge.jar \"$@\"", "msgforge"]

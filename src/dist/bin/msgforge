@@ -8,6 +8,6 @@ java="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 # An older Java fails with a class file version number; say what is needed instead.
 if ! "$java" -version 2>&1 | grep -Eq 'version "(1[7-9]|[2-9][0-9])'; then
     echo "msgforge needs Java 17 or newer. Install one, or point JAVA_HOME at one." >&2
-    exit 1
+    exit 2
 fi
 exec "$java" "-Dmsgforge.workdir=$here" -jar msgforge.jar "$@"

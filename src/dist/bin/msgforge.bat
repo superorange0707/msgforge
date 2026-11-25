@@ -18,4 +18,4 @@ if not errorlevel 1 exit /b %CODE%
 echo.
 echo msgforge needs Java 17 or newer. Install one, or point JAVA_HOME at one.
 pause
-exit /b 1
+exit /b 2

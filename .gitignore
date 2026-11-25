@@ -8,3 +8,4 @@ build/
 msgforge.json
 msgforge.json.tmp
 plugins/
+!examples/quickstart/msgforge.json

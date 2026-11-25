@@ -1,0 +1,65 @@
+# msgforge and a single-node Kafka, with a Kafka connection and a scenario that passes.
+#   docker compose up --build        then open http://localhost:8585
+# See README.md next to this file.
+name: msgforge-quickstart
+
+services:
+  kafka:
+    image: apache/kafka:4.1.1
+    environment:
+      # One node that is both broker and controller. Other containers reach it as kafka:9092; it is not published.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null"]
+      interval: 5s
+      timeout: 20s
+      retries: 20
+
+  msgforge:
+    build: ../..
+    image: msgforge:quickstart
+    ports:
+      # 127.0.0.1 only: the console has no login.
+      - "127.0.0.1:${MSGFORGE_PORT:-8585}:8585"
+    volumes:
+      # Copied to the volume on the first start; what the console changes stays on the volume, not in this folder.
+      - ./msgforge.json:/app/msgforge.json:ro
+      - data:/data
+    environment:
+      MSGFORGE_MQ_PASSWORD: ${MQ_APP_PASSWORD:-}
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # Optional: IBM MQ, with `docker compose --profile ibm-mq up`. IBM's image runs only after you accept IBM's
+  # licence yourself: read it, then set MQ_LICENSE=accept (and MQ_APP_PASSWORD) in your shell or in a .env file.
+  mq:
+    profiles: [ibm-mq]
+    image: icr.io/ibm-messaging/mq:9.4.5.0-r1
+    platform: linux/amd64   # IBM publishes no arm64 image of it; on Apple silicon Docker emulates it, slowly
+    environment:
+      LICENSE: ${MQ_LICENSE:-not-accepted}
+      MQ_QMGR_NAME: QM1
+      MQ_APP_PASSWORD: ${MQ_APP_PASSWORD:-}
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if [ "$$LICENSE" != accept ]; then
+        echo "IBM MQ runs only once you accept IBM's licence: set MQ_LICENSE=accept and MQ_APP_PASSWORD, then run docker compose --profile ibm-mq up again." >&2;
+        echo "To read the licence first: docker run --rm -e LICENSE=view icr.io/ibm-messaging/mq:9.4.5.0-r1" >&2; exit 1; fi;
+        exec runmqdevserver
+
+volumes:
+  data:
