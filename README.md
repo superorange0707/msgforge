@@ -2,7 +2,7 @@
 
 A message simulator: write a template, press Send, and msgforge publishes as many generated messages as you ask for to a queue. Message formats live in files and everything else is set up in the console, so a new format, queue or broker is a few clicks, not a code change.
 
-It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ, MQTT, AMQP 1.0 and Amazon SQS. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
+It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ, MQTT, AMQP 1.0, Amazon SQS and NATS. It can also listen where the messages should end up and tell you whether they got there. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
 
 ![The msgforge console: a template with its preview, the send form, and two verified runs](docs/console.png)
 
@@ -175,6 +175,7 @@ The release carries these as plugins. Their settings, how headers map and how ea
 | [MQTT](docs/connections.md#mqtt) (5 and 3.1.1) | a topic | Mosquitto 2.1.4 |
 | [AMQP 1.0](docs/connections.md#amqp-10) (ActiveMQ Artemis, ActiveMQ, Azure Service Bus, Solace, RabbitMQ 4…) | a queue address | RabbitMQ 4.4.1; ActiveMQ Artemis 2.40 embedded in the tests |
 | [Amazon SQS](docs/connections.md#amazon-sqs) (and ElasticMQ, LocalStack) | a queue name or URL | ElasticMQ 1.7.1 only, not AWS |
+| [NATS](docs/connections.md#nats) (core, JetStream publishing) | a subject | NATS Server 2.15.3 |
 
 ## Running in a container
 
@@ -227,6 +228,7 @@ The Headers box adds message properties, written like Overrides: `JMSCorrelation
 | MQTT | an MQTT 5 user property. MQTT 3.1.1 has none: a header fails the run. |
 | AMQP 1.0 | an application property; `JMSCorrelationID` sets the correlation id and `JMSType` the subject |
 | Amazon SQS | a `String` message attribute (at most 10); `MessageGroupId` and `MessageDeduplicationId` set those parameters |
+| NATS | a NATS header |
 
 ## Scenarios
 
@@ -273,6 +275,7 @@ If one message arrives more than once, its first arrival counts. A message that 
 | MQTT | subscribes with a clean session; every subscriber gets a copy, so others are not affected. Wildcards work. |
 | AMQP 1.0 | consumes, like IBM MQ. Expect on queues that nothing else reads. |
 | Amazon SQS | polls and deletes what it receives: it consumes, and competes with other consumers of the queue |
+| NATS | a core subscription: a copy of each message, nothing taken from streams or other subscribers. Wildcards work. |
 | HTTP | cannot receive |
 
 Listening starts before the first message is sent and stops when the run ends. If a receiver breaks while the run is going (the broker closes the connection, a message cannot be read), the run ends as failed with that error; it is not reported as missing messages. And before a run calls anything missing, it asks each broker it listens to whether it still answers (Kafka and IBM MQ; up to 5 seconds for Kafka). A broker that does not answer fails the run, whatever the timeout, and one that is frozen with its connections still open is given 15 seconds; a Kafka broker that goes quiet for good is also noticed during a long wait, after about 10 seconds.

@@ -94,3 +94,29 @@ Receiving polls the queue (up to 10 messages, waiting up to 2 seconds per call),
 Test connection lists one queue. An "access denied" answer also passes, since only valid credentials get that far; a user allowed to send to one queue usually may not list them.
 
 Verified against ElasticMQ 1.7.1 (the `softwaremill/elasticmq` image): sending by name and by URL, attributes, receiving and deleting, a FIFO queue, a missing queue. ElasticMQ accepts any credentials and has no TLS, so signing, refused credentials and TLS were not checked against a server, and nothing was tried against AWS itself or LocalStack.
+
+## NATS
+
+NATS core publish and subscribe, with optional JetStream publishing, through the NATS Java client.
+
+| Setting | Notes |
+|---|---|
+| Servers | `nats://host:4222`, comma-separated for a cluster (tried in order); `tls://host:4222` for TLS; `ws://` / `wss://` over WebSocket |
+| User, Password | a user and password login |
+| Token | a token login |
+| Credentials file | a `.creds` file (JWT and NKey seed), for decentralised auth. The file holds a secret; keep it readable only by the account msgforge runs as. |
+| JetStream | `true` to publish through JetStream and wait for the stream's acknowledgement |
+
+The destination is a subject; an expectation may use wildcards (`orders.*`, `orders.>`).
+
+A core publish has no acknowledgement. Each one is followed by a round trip to the server (a PING), so a publish the server refuses for permissions is reported at that message and a dead connection at the first send. With JetStream on, each send waits for the stream's acknowledgement instead, and a subject that no stream takes fails the run (`503 No Responders`).
+
+Headers become NATS headers (NATS Server 2.2 or later).
+
+Receiving is a core subscription, so it reads nothing from a stream and takes nothing from anyone: every subscriber gets its own copy, and a queue group of the system under test still gets its one. It sees messages published with or without JetStream, from the moment it subscribes. A subscription the server refuses for permissions, a connection that is lost, or messages the client had to drop because it fell behind all fail the run. The client does not reconnect.
+
+With TLS the server's certificate and host name are checked.
+
+Test connection logs in and makes one PING round trip.
+
+Verified against NATS Server 2.15.3 (the `nats:2` image): core sending and receiving with headers, another subscriber still getting its copy, refused publish and subscription, a refused login, JetStream publishing with and without a stream, TLS with a PEM CA file and a client certificate, the host name check. Token and credentials-file logins and WebSocket were not tried.

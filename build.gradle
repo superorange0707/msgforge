@@ -56,7 +56,7 @@ ext.bundledJars = { Configuration classpath ->
 }
 
 // The plugins a release carries in plugins/, besides Kafka. Each is a project under extensions/.
-def bundledPlugins = ['rabbitmq', 'mqtt', 'amqp', 'sqs']
+def bundledPlugins = ['rabbitmq', 'mqtt', 'amqp', 'sqs', 'nats']
 bundledPlugins.each { evaluationDependsOn(":extensions:${it}") }
 
 // What a release ships: one zip that works where it is unpacked, with the bundled packs and the plugins in place.

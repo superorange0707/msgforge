@@ -60,6 +60,14 @@ The IBM MQ client is the property of IBM (Licensed Materials - Property of IBM, 
 | `third-party-jackson-core` | AWS SDK for Java 2 (a repackaged Jackson core) | Apache-2.0; includes FastDoubleParser (MIT), its licence files are in the jar |
 | `reactive-streams` | Reactive Streams | MIT-0, text below |
 
+## In the NATS plugin (`plugins/msgforge-nats-*.jar`)
+
+| Jars | Project | Licence |
+|---|---|---|
+| `jnats` | NATS Java client | Apache-2.0 |
+| `bcprov-lts8on` | Bouncy Castle (used by the client for NKey signatures) | Bouncy Castle Licence (MIT), text below |
+| `jspecify` | JSpecify annotations | Apache-2.0 |
+
 ## In the container image
 
 The image is built on `eclipse-temurin:17-jre`; the Java runtime and the operating system in it come with their own licences, inside the image.
