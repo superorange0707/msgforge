@@ -120,13 +120,45 @@ class CliTest {
         assertTrue(twins.out().contains("twin-1, twin-2"), twins.out());
 
         assertEquals(2, cli("run", "Loop", "--count", "0").code());
-        assertEquals(2, cli("run", "Loop", "--rate", "fast").code());
+        Result fast = cli("run", "Loop", "--rate", "fast");
+        assertEquals(2, fast.code());
+        assertTrue(fast.out().contains("--rate needs a number, not fast"), fast.out());
         assertEquals(2, cli("run").code());
 
         Files.writeString(dir.resolve("bad.json"), "{not json");
         Result badConfig = cli("list", "--msgforge.config=" + dir.resolve("bad.json"));
         assertEquals(2, badConfig.code());
         assertTrue(badConfig.out().contains("is not valid JSON"), badConfig.out());
+        assertFalse(badConfig.out().contains("Error creating bean"), badConfig.out());
+    }
+
+    @Test
+    void aLoginPageInFrontOfTheServerIsNamedAsSuch() throws Exception {
+        com.sun.net.httpserver.HttpServer proxy = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        proxy.createContext("/", exchange -> {
+            byte[] page = "<html>Sign in</html>".getBytes();
+            exchange.sendResponseHeaders(302, page.length);
+            exchange.getResponseBody().write(page);
+            exchange.close();
+        });
+        proxy.start();
+        try {
+            Result r = cli("list", "--url", "http://127.0.0.1:" + proxy.getAddress().getPort());
+            assertEquals(2, r.code());
+            assertTrue(r.out().contains("answered 302 with something that is not msgforge's answer"), r.out());
+        } finally {
+            proxy.stop(0);
+        }
+    }
+
+    @Test
+    void settingsMayComeBeforeTheCommand() {
+        assertTrue(Cli.handles(new String[] {"--msgforge.config=x.json", "run", "Loop"}));
+        assertTrue(Cli.handles(new String[] {"--msgforge.config=x.json", "list"}));
+        assertFalse(Cli.handles(new String[] {"--server.port=8686"}));
+        Result r = cli("--msgforge.packs=packs", "run", "Loop", "--count", "2");
+        assertEquals(0, r.code(), r.out());
+        assertTrue(r.out().contains("sent 2, arrived 2"), r.out());
     }
 
     @Test
@@ -166,6 +198,8 @@ class CliTest {
         } finally {
             server.close();
         }
-        assertEquals(2, cli("run", "Loop", "--url", "http://localhost:1").code());
+        Result unreachable = cli("run", "Loop", "--url", "http://localhost:1");
+        assertEquals(2, unreachable.code());
+        assertTrue(unreachable.out().contains("cannot reach http://localhost:1"), unreachable.out());
     }
 }

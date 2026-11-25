@@ -75,7 +75,7 @@ The console has no login. Whoever reaches it can send messages with every saved 
 - Set `MSGFORGE_ALLOWED_HOSTS` to the name people open, for example `msgforge.test.example`. The proxy must pass the original `Host` header on; msgforge accepts a change from the browser only when its `Origin` matches that host.
 - Use one instance per test environment, each with that environment's variables. One instance holds its runs in memory: run one replica.
 - Make the shared packs read-only (in the image, or a read-only mount) and keep their content in Git. People change templates on their own machines and send a merge request; the next image brings the change.
-- A pipeline that uses `--url` (see [ci.md](ci.md)) sends no credentials. Give it a way past the proxy that only your build agents can use, such as the internal Service address with that name in `MSGFORGE_ALLOWED_HOSTS`, or run that pipeline inside the cluster.
+- A pipeline that uses `--url` (see [ci.md](ci.md)) sends no credentials. Give it a way past the proxy that only your build agents can use, such as the internal Service address with that name in `MSGFORGE_ALLOWED_HOSTS`, or run that pipeline inside the cluster. Any pod in a cluster can reach a Service by default, so limit it to the build agents' namespace with a NetworkPolicy.
 
 This guide has not been tried behind oauth2-proxy or any other single sign-on proxy. What has been checked is msgforge's side: a request with a host name that is not allowed gets 403.
 

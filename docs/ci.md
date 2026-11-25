@@ -6,7 +6,9 @@ A scenario saved in the console can be run by a pipeline with `msgforge run`. It
 |---|---|
 | `0` | the run passed, or it had nothing to verify and finished |
 | `1` | it finished and a check failed (`FAIL`) |
-| `2` | anything else: no such scenario, a setting or `msgforge.json` that is wrong, a run that failed (a broker that is down) or was cancelled, Java missing |
+| `2` | anything else: no such scenario, a setting or `msgforge.json` that is wrong, a run that failed (a broker that is down) or was cancelled in the console, Java missing |
+
+When the pipeline itself stops msgforge (a cancelled job), the process ends with the signal's code, 130 or 143, and writes no report.
 
 ```
 $ bin/msgforge run "Kafka loop" --report build/msgforge.xml

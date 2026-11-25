@@ -45,8 +45,15 @@ final class Cli {
         this.out = out;
     }
 
+    /** The command is the first argument that is not a --setting, so settings may come before it as well as after. */
     static boolean handles(String[] args) {
-        return args.length > 0 && (args[0].equals("run") || args[0].equals("list"));
+        String command = command(args);
+        return command != null && (command.equals("run") || command.equals("list"));
+    }
+
+    private static String command(String[] args) {
+        for (String a : args) if (!a.startsWith("--")) return a;
+        return null;
     }
 
     /** @return the exit code */
@@ -69,12 +76,17 @@ final class Cli {
     }
 
     private int execute(String[] args) {
-        String command = args[0], scenario = null, report = null, url = null;
+        String command = command(args), scenario = null, report = null, url = null;
+        boolean commandSeen = false;
         Integer count = null;
         Double rate = null;
         List<String> spring = new ArrayList<>();   // everything else is a setting, as for the server
         try {
-            for (int i = 1; i < args.length; i++) {
+            for (int i = 0; i < args.length; i++) {
+                if (!commandSeen && args[i].equals(command)) {
+                    commandSeen = true;
+                    continue;
+                }
                 String a = args[i], name = a.contains("=") ? a.substring(0, a.indexOf('=')) : a;
                 boolean ours = List.of("--report", "--url", "--count", "--rate").contains(name);
                 String value = !ours ? null : a.contains("=") ? a.substring(a.indexOf('=') + 1) : ++i < args.length ? args[i] : null;
@@ -82,8 +94,8 @@ final class Cli {
                 switch (name) {
                     case "--report" -> report = value;
                     case "--url" -> url = value.replaceAll("/+$", "");
-                    case "--count" -> count = Integer.valueOf(value);
-                    case "--rate" -> rate = Double.valueOf(value);
+                    case "--count" -> count = number(name, value, Integer::valueOf);
+                    case "--rate" -> rate = number(name, value, Double::valueOf);
                     default -> {
                         if (a.startsWith("--")) spring.add(a);
                         else if (scenario == null && command.equals("run")) scenario = a;
@@ -92,7 +104,7 @@ final class Cli {
                 }
             }
             if (command.equals("run") && scenario == null) throw new IllegalArgumentException("run needs the name or id of a scenario");
-        } catch (IllegalArgumentException e) {   // NumberFormatException included
+        } catch (IllegalArgumentException e) {
             out.println("msgforge: " + e.getMessage() + ". bin/msgforge --help shows the usage.");
             return ERROR;
         }
@@ -101,8 +113,10 @@ final class Cli {
         Backend backend;
         try {
             backend = url == null ? local(spring) : remote(url);
-        } catch (Exception e) {
-            return error(scenario, reportFile, "msgforge could not start: " + Runs.describe(e));
+        } catch (Exception e) {   // the cause says what is wrong (a msgforge.json that is not JSON); the wrappers only say where
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            return error(scenario, reportFile, "msgforge could not start: " + Runs.describe(root));
         }
         try (backend) {
             List<JsonNode> scenarios = backend.scenarios();
@@ -114,6 +128,14 @@ final class Cli {
             return run(backend, find(scenarios, scenario), count, rate, reportFile);
         } catch (Exception e) {
             return error(scenario, reportFile, Runs.describe(e));
+        }
+    }
+
+    private static <T> T number(String option, String value, java.util.function.Function<String, T> parse) {
+        try {
+            return parse.apply(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(option + " needs a number, not " + value);
         }
     }
 
@@ -145,7 +167,8 @@ final class Cli {
         long lastPrint = 0;
         while (true) {
             run = backend.run(id);
-            boolean ended = !run.path("finishedAt").isNull();
+            // the status is what a run sets last when it ends, so a view that says it ended has everything else too
+            boolean ended = !List.of("RUNNING", "VERIFYING").contains(run.path("status").asText());
             if (!run.path("status").asText().equals(status) || (System.nanoTime() - lastPrint > 2_000_000_000L && run.path("sent").asInt() != sent) || ended) {
                 status = run.path("status").asText();
                 sent = run.path("sent").asInt();
@@ -290,8 +313,19 @@ final class Cli {
                 HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url + path)).timeout(Duration.ofSeconds(30))
                         .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body.toString()));
                 if (body != null) request.header("Content-Type", "application/json");
-                HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-                JsonNode answer = response.body().isBlank() ? json.missingNode() : json.readTree(response.body());
+                HttpResponse<String> response;
+                try {
+                    response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+                } catch (java.net.ConnectException e) {
+                    throw new IllegalStateException("cannot reach " + url + " (" + Runs.describe(e) + ")");
+                }
+                JsonNode answer;
+                try {
+                    answer = response.body().isBlank() ? json.missingNode() : json.readTree(response.body());
+                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {   // a login page, a proxy's error page
+                    throw new IllegalStateException(url + " answered " + response.statusCode()
+                            + " with something that is not msgforge's answer; a proxy that asks for a login may be in front of it");
+                }
                 if (response.statusCode() != 200) {
                     throw new IllegalStateException(url + " answered " + response.statusCode() + ": " + answer.path("error").asText(response.body()));
                 }
