@@ -7,7 +7,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -72,13 +71,11 @@ class NatsTypeTest {
         sender.send("orders.eu", "plain", Map.of());
         verify(nc).publish(eq("orders.eu"), isNull(Headers.class), any(byte[].class));
 
-        // the server answers a publish it does not allow with -ERR, which arrives before the PONG of the flush
-        doAnswer(call -> {
-            problems.errorOccurred(nc, "Permissions Violation for Publish to \"secret.x\"");
-            return null;
-        }).when(nc).publish(eq("secret.x"), nullable(Headers.class), any(byte[].class));
+        // the server answers a publish it does not allow with -ERR, which the client has recorded when the flush returns
+        when(nc.getLastError()).thenReturn("Permissions Violation for Publish to \"secret.x\"").thenReturn(null);
         assertTrue(assertThrows(java.io.IOException.class, () -> sender.send("secret.x", "x", Map.of())).getMessage().contains("Permissions Violation"));
-        sender.send("orders.eu", "next", Map.of());   // a refusal does not stick to the next message
+        sender.send("orders.eu", "next", Map.of());
+        verify(nc, org.mockito.Mockito.times(4)).clearLastError();   // before every publish, so a refusal does not stick to the next message
 
         sender.check();
         sender.close();

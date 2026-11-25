@@ -7,7 +7,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -98,14 +97,10 @@ public class NatsType implements TransportType {
         return b.build();
     }
 
-    /**
-     * What the server reports on its own, outside any call: a permission it refused, a connection it closed.
-     * The last one is kept for a sender to pick up after its next round trip; a receiver hands each to its run.
-     */
+    /** What the server reports on its own, outside any call: a permission it refused, a connection it closed. A receiver hands each to its run. */
     static final class Problems implements ErrorListener, ConnectionListener {
 
         final AtomicBoolean closing = new AtomicBoolean();
-        final AtomicReference<String> last = new AtomicReference<>();
         private final Consumer<Exception> report;
 
         Problems(Consumer<Exception> report) {
@@ -113,7 +108,6 @@ public class NatsType implements TransportType {
         }
 
         void report(String problem) {
-            last.set(problem);
             if (!closing.get()) report.accept(new IllegalStateException(problem));
         }
 
@@ -156,11 +150,13 @@ public class NatsType implements TransportType {
                     js.publish(subject, h, data);   // waits for the stream's acknowledgement; no stream on the subject is an error
                     return;
                 }
-                problems.last.set(null);
+                // The server answers a publish it refuses with -ERR before the PONG of the flush. The client records it as it
+                // reads it, so it is there when flush returns; its error listener hears of it later, on another thread.
+                nc.clearLastError();
                 nc.publish(subject, h, data);
                 nc.flush(Duration.ofSeconds(10));
-                String refused = problems.last.get();
-                if (refused != null) throw new IOException(refused);
+                String refused = nc.getLastError();
+                if (refused != null) throw new IOException("The NATS server reported: " + refused);
             }
 
             @Override
