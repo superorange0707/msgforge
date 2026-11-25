@@ -81,6 +81,8 @@ A run can make a share of its messages invalid to see what the system under test
 
 `field-removed` and `type-changed` parse the message, so they need JSON or XML. A run that asks for them with a template that is neither (or that does not parse, or has a DOCTYPE) is refused before it starts, with the template's name. The faulted message is written out again by the parser, so its layout can differ from the template's (JSON numbers keep their text).
 
+In a run that verifies, `field-removed` and `type-changed` leave alone the field the message is recognised by (the one holding its token, and anything that contains it). A system that accepts such a message forwards it with that field intact, and the run reports it as accepted although invalid; with the field gone it could only have been reported as missing. A template in which that field is the only one is refused for these two kinds before the run starts. `empty`, `garbage` and `truncated` cannot keep the token whatever is done; those are recognised by a header or by their correlation id, as described below.
+
 Invalid messages are counted apart (`invalid`, and `faults` by kind), and the Sent list shows which fault a message was given.
 
 ### Verifying them
@@ -116,9 +118,11 @@ If the system under test does neither, a rejected message cannot be told from an
 
 ## Seeds
 
-Every run has a seed, shown with the run and in its reports. Given one (`"seed": 42`, Load › Seed, `--seed`), a run makes the same bodies and the same faults for the same message numbers, whatever the number of senders: `{{uuid}}`, `{{id}}`, `{{int}}`, `{{decimal}}`, `{{pick}}`, `{{digits}}`, `{{alnum}}`, pack fields built from them, which messages are faulted, with which kind, and where.
+Every run has a seed, shown with the run and in its reports. Given one (`"seed": 42`, Load › Seed, `--seed`), a run makes the same bodies and the same faults for the same message numbers, whatever the number of senders: `{{int}}`, `{{decimal}}`, `{{pick}}`, `{{digits}}`, `{{alnum}}`, pack fields built from them, which messages are faulted, with which kind, and where.
 
-Not repeatable: `{{now}}` and `{{today}}`, generators from plugins, which sender sends which message and so the order in which messages reach the broker, and anything about timing. A seed above 2^53 loses digits in the console (a browser's numbers); the API and the command line take any 64-bit number.
+Not repeated, on purpose: `{{uuid}}` and `{{id}}`. An id is what a message is recognised by when it arrives. If a seed repeated it, a message the last run left on a queue would pass for an arrival of this run, and an id drawn from a seed could be guessed. They come from the system's secure random source in every run, seeded or not. So two runs with one seed differ in their ids and in nothing else that is random; a message cut off inside its id is cut at the same place.
+
+Also not repeatable: `{{now}}` and `{{today}}`, generators from plugins, which sender sends which message and so the order in which messages reach the broker, and anything about timing. A seed above 2^53 loses digits in the console (a browser's numbers); the API and the command line take any 64-bit number.
 
 ## Raw
 
@@ -144,6 +148,19 @@ A bucket pulls one value out of each arrival: `pointer` is a JSON pointer into t
 
 Per watched destination the run reports the count, the rate over the last 10 seconds, the time of the last arrival, a table per bucket, and the newest 50 arrivals with their bucket values, the number of the sent message they were recognised as (in a run that verifies), and their size. Destinations a run expects arrivals on are counted the same way, without buckets.
 
+**How long a run listens.** Where a run expects arrivals it knows when it is done: everything has arrived. On a destination it only watches, nobody can say when the last reject has come. So a run that watches a destination it expects nothing on goes on listening after its last send for its whole timeout (`timeoutSeconds`, 10 unless set; it shows as `VERIFYING` meanwhile, and cancelling ends the wait). Set the timeout to how long the system under test may take. A run whose watched destinations are all ones it expects arrivals on ends as soon as everything has arrived, as before. Before this, a watching run closed its receiver right after the last send and missed whatever was still on its way.
+
+**What a receiver takes when it closes.** A receiver that is closed while the broker has already handed it messages must not lose them:
+
+| Type | At close |
+|---|---|
+| RabbitMQ | each message is acknowledged after it has been handed over (at most 200 are sent ahead), so what was sent ahead and not handed over goes back to the queue. Until this change messages were acknowledged automatically and those were lost. |
+| IBM MQ, AMQP 1.0 (JMS) | a message is acknowledged when the listener returns, and closing waits for the listener; what the client holds unconsumed is released by the provider. With IBM MQ read-ahead on a non-persistent queue, read-ahead messages can be discarded at close: that is the queue's setting, not msgforge's. |
+| Amazon SQS | a batch is handed over and then deleted. A close in between leaves messages undeleted; they reappear after the visibility timeout, so a message can be seen twice, not lost. |
+| Kafka, Pulsar, NATS, MQTT, Dry run | they read copies; nothing is taken from anybody. What arrives after the close is simply not seen. |
+
+None of this was run against the real brokers here; the RabbitMQ change is tested against a mocked channel (acknowledged after handing over, in order).
+
 What arrives is somebody else's data, and a bucket expression is typed by a user. Neither is trusted:
 
 - Bodies are not kept, apart from the newest three per destination, each cut at 2,000 characters, shown under "Newest bodies" in the console. They are never logged and never part of a report.
@@ -166,7 +183,7 @@ A monitor is the same thing outside a run: an always-on view of a reject queue, 
 ]
 ```
 
-`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, Saved in the new-monitor dialog or on a running monitor writes it there, pressing it again takes it out (the monitor goes on watching), and stopping a saved monitor removes it from the file as well, after asking. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
+`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, Saved in the new-monitor dialog or on a monitor's view writes it there, and pressing it again takes it out (a monitor that is listening goes on listening). Stopping is a different thing: a saved monitor that is stopped stays in the file and in the list, shown as stopped with what it counted, starts again with the next start of msgforge, and can be started again before that (Start in its view, or the button next to it in the sidebar). A monitor that is not saved is gone when it is stopped, and a stopped one that is taken out of the file is gone too. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
 
 **A monitor that cannot listen** does not keep msgforge from starting. Saved monitors start after the console is up, one after the other on a thread of their own, and one whose broker does not answer (or whose connection is missing, or whose variable is not set) is listed as down with the reason. It tries again after 5, 10, 20, 40 and then every 60 seconds until it is up or stopped. The same happens when receiving breaks later: the monitor goes down, keeps what it counted, and comes back by itself. An entry that only an edit can mend (a bucket that is not a regular expression, no destination) is listed as down with what is wrong and is not retried. A monitor started by hand that cannot listen is refused with the reason and not created.
 
@@ -180,7 +197,9 @@ A monitor is the same thing outside a run: an always-on view of a reject queue, 
 - A monitor sees everything on its destination, a run's messages included; that is the point of it.
 - Two runs that both *expect* arrivals on the same destination are still not allowed at once: the second is refused, with the first's name. Each would see the other's messages arrive, and a match expression that is not unique across runs (a counter, say) would take one for its own. A run that only watches a destination (`watches`) joins freely.
 
-API: `GET|POST /api/monitors` (`connection`, `destination`, `buckets`, `name`, `save`), `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved`, `DELETE /api/monitors/{id}`. Each monitor has a `state` (`starting`, `up`, `down`), and when down an `error` and the time of its next try in `retryAt`.
+API: `GET|POST /api/monitors` (`connection`, `destination`, `buckets`, `name`, `save`), `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (into the file, out of it), `DELETE /api/monitors/{id}` (stop), `POST /api/monitors/{id}/start`. Each monitor has a `state` (`starting`, `up`, `down`, `stopped`), and when down an `error` and the time of its next try in `retryAt`.
+
+Starting a run and starting a monitor each check and register under one lock of their own (two runs that expect on one destination; two monitors on one destination), so two starts at the same moment cannot both pass. A run and a monitor do not exclude each other, so there is nothing to check between the two.
 
 ## Trying it without a broker
 
@@ -207,7 +226,9 @@ A run can be downloaded from its view in the console, or from the API, at any ti
 
 A report holds names, counts, errors and bucket values, never a message body. Text that came from outside is escaped in the HTML, and in the CSV a cell that a spreadsheet would take for a formula gets a `'` in front. Reports are served as downloads, not as pages of the console.
 
-With `MSGFORGE_REPORTS=/some/folder` every run that ends is saved there in all four formats, as `msgforge-<UTC start>-<run id>-<label>.<format>`. The folder keeps the newest `MSGFORGE_REPORTS_KEEP` runs (50 unless set) and removes older ones; it only ever removes files with names of that form. The archive button at the bottom of the sidebar lists them (`GET /api/reports`, `GET /api/reports/{file}`). The folder is written by msgforge with the rights it runs with; reports are not cleaned of anything a label or a destination name says, so treat the folder like the console.
+With `MSGFORGE_REPORTS=/some/folder` every run that ends is saved there in all four formats, as `msgforge-<UTC start>-<run id>-<label>.<format>`. The folder keeps the newest `MSGFORGE_REPORTS_KEEP` runs (50 unless set) and removes older ones; it only ever removes files with names of that form. A run is shown as ended only after its reports have been written, so a script that waits for a run to end can read them at once. The archive button at the bottom of the sidebar lists them (`GET /api/reports`, `GET /api/reports/{file}`).
+
+**One folder per msgforge.** The retention removes the oldest files with names of that form whoever wrote them, so two instances that share a folder would delete each other's reports. Give each its own. (Telling the files apart would take an identity that survives a restart, which a container does not have; a per-process memory of what was written would let the folder grow with every restart.) The folder is written by msgforge with the rights it runs with; reports are not cleaned of anything a label or a destination name says, so treat the folder like the console.
 
 From the command line, `--save <folder>` writes the four files for that run (`msgforge-<run id>.html` and so on), with or without `--url`. `--report` still writes JUnit XML.
 
@@ -222,6 +243,8 @@ From the command line, `--save <folder>` writes the four files for that run (`ms
 | `msgforge_runs_active`, `msgforge_senders` | runs going on now, and their sender threads |
 | `msgforge_send_rate`, `msgforge_target_rate` | messages a second now, over all active runs: actual and planned |
 | `msgforge_arrivals_total{connection,destination,source}` | arrivals on a destination a run watched (`source="run"`, since start) or a monitor is on (`source="monitor"`, since its reset; the series ends when the monitor stops) |
+
+Connections are labelled by name. Two connections with the same name are one series, their counts added up: the same labels twice would make Prometheus refuse the whole scrape.
 
 It holds numbers and names only: no message content, no connection setting, nothing read from the environment. A destination is labelled as it was written, so `${MSGFORGE_QUEUE}` stays that text; label values are escaped, cut at 200 characters, and capped at 200 destinations (further ones are counted as `(other)`). The endpoint has no login of its own. It is under the same rule as the rest: only requests addressed to `localhost` or a name in `MSGFORGE_ALLOWED_HOSTS` are answered, so a Prometheus on another machine has to scrape a name that is allowed.
 
@@ -302,7 +325,9 @@ Tested automatically (`./gradlew test`), with Dry run and fakes unless said othe
 
 - Ramp-up, rate across senders, duration, count, unlimited, cancel; senders added while a run falls behind (a fake sender that takes 20 ms).
 - The failure rule; the constant size of the statistics; percentiles against a known distribution.
-- Every kind of fault on JSON and XML; refusals; the same seed giving the same bodies and faults with one sender and with four.
+- Every kind of fault on JSON and XML; refusals; the field holding the token never removed or changed, and accepted invalid messages all reported as accepted; the same seed giving the same bodies and faults with one sender and with four, with ids that differ.
+- A run that only watches waiting its timeout and counting rejects that arrive after its last send, with and without a monitor on the same destination.
+- A run's reports being in the folder at the moment it is shown as ended.
 - The four outcomes for invalid messages, with a stand-in system under test, and the token in a header.
 - **Recognising a reply by its correlation id over real JMS**, against the embedded ActiveMQ Artemis broker: `JmsSender` reports the `JMSMessageID`, `JmsReceiver` hands over properties and `JMSCorrelationID`, and empty replies are matched.
 - Buckets, their limits, an expression that backtracks without end.
@@ -331,9 +356,11 @@ What each connection type gives a run:
 | Kafka | record headers, and the record key as `key` | none | none |
 | RabbitMQ | the headers table, and `content_type`, `content_encoding`, `correlation_id`, `message_id`, `reply_to`, `type`, `app_id` when set | the `correlation_id` property | none: the broker assigns no id |
 | MQTT | version 5: user properties. 3.1.1: none | version 5: correlation data. 3.1.1: none | none |
-| Amazon SQS | message attributes | none | the `MessageId` SQS returns |
+| Amazon SQS | message attributes | none | none (SQS returns one, but no arrival could carry it back) |
 | NATS | message headers | none | none |
-| Apache Pulsar | message properties, and the key as `key` | none | the `MessageId` the client returns |
+| Apache Pulsar | message properties, and the key as `key` | none | none (the broker returns one, but no arrival could carry it back) |
 | HTTP | cannot receive | | none |
 
-Where the last column says none, or the system under test does not copy the id into the correlation field, put the token in a header as described above. For Dry run this was run end to end; for AMQP 1.0 and MQTT against the embedded Artemis broker; for JMS in the core likewise. Kafka, RabbitMQ, SQS, NATS and Pulsar were checked against mocks or fakes of their client libraries only: that SQS returns all attributes when asked for `All`, and that a Pulsar consumer sees the same id text the producer was given, are assumptions from their documentation.
+Matching by correlation id needs both of the last two columns, so it works on Dry run, IBM MQ and AMQP 1.0. Everywhere else, and wherever the system under test does not copy the id into the correlation field, put the token in a header as described above. For Dry run this was run end to end; for AMQP 1.0 and MQTT against the embedded Artemis broker; for JMS in the core likewise. Kafka, RabbitMQ, SQS, NATS and Pulsar were checked against mocks or fakes of their client libraries only; that SQS returns all attributes when asked for `All` is an assumption from its documentation.
+
+**AMQP 1.0, a known gap.** When the Qpid JMS client cannot turn an arriving AMQP message into a JMS message (annotations in the `x-opt-jms-*` family that do not hold what it expects, for one), it logs a warning and drops the message before any listener sees it. The message is off the queue and msgforge neither counts it nor reports an error, because nothing reaches it. This is the client's behaviour and older than this work; it was reported by a review and has not been reproduced or worked around here. If a watched AMQP queue counts fewer messages than were put on it, look for that warning in msgforge's log.

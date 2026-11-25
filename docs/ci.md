@@ -110,6 +110,8 @@ bin/msgforge list --url https://msgforge.test.example
 
 The scenario, its connections and its packs are the server's. The run is started through the API (`POST /api/runs`, with the options applied), followed until it ends, and judged with the same exit codes. If the pipeline is cancelled while the run is going, the run on the server is cancelled too. msgforge answers only to host names in its `MSGFORGE_ALLOWED_HOSTS`; another name gets `answered 403` and exit code 2. A proxy that asks for a login in front of msgforge (see [deploy.md](deploy.md)) has to let the pipeline through, for example on an internal address with its own host name; `--url` sends no credentials.
 
+The command line and the server have to match: this command line follows a run with `GET /api/runs/{id}`, which a msgforge before 0.3 does not have. Against an older server the run is started and the command then exits 2, saying that the server is older than 0.3. Use the command line that came with the server, or upgrade the server first.
+
 The server keeps the 20 most recent finished runs. On a busy shared server where more than 20 other runs end while a pipeline follows one, the pipeline loses sight of it and exits 2.
 
 ## What has been checked

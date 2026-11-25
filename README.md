@@ -323,7 +323,7 @@ bin/msgforge run "Order routing" --report build/msgforge.xml   # by name or id
 bin/msgforge list
 ```
 
-It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify), `1` when a check failed and `2` for anything else. `--report` writes JUnit XML, `--save <folder>` writes the run's report as HTML, JSON and CSV, `--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
+It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify and every send went out), `1` when a check failed or some sends failed, and `2` for anything else. `--report` writes JUnit XML, `--save <folder>` writes the run's report as HTML, JSON and CSV, `--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
 
 ## Extending msgforge
 
@@ -378,7 +378,7 @@ To verify arrivals, add `"expect":{"connection":"…","destination":"…"}` to t
 A load run adds `"load":{"rampUpSeconds":…,"durationSeconds":…,"senders":…,"unlimited":…}`, `"invalid":{"percent":…,"kinds":[…],"expect":{…}}`, `"seed"`, `"watches":[{"connection":"…","destination":"…","buckets":[{"pointer":"/reason"}]}]` and `"raw":true`; `count` may then be 0. Each run in the list carries `failed`, `invalid`, `targetRate`, `actualRate`, `elapsedMs`, `latency`, `errors`, `seed` and `watched`, and a check also has `invalid`, `rejected` and `accepted`. [docs/load.md](docs/load.md) explains them.
 
 Runs: `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}` (one run with its series over time and watched destinations), `GET /api/runs/{id}/report?format=html|json|csv|series`, `DELETE /api/runs/{id}` (cancels, also while verifying).
-Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (keep it in `msgforge.json`, or not), `DELETE /api/monitors/{id}`.
+Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (keep it in `msgforge.json`, or not), `DELETE /api/monitors/{id}` (stop), `POST /api/monitors/{id}/start`.
 Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.
