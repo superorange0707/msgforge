@@ -136,15 +136,8 @@ public class PulsarType implements TransportType {
         return new Sender() {
             @Override
             public void send(String topic, String body, Map<String, String> headers) throws Exception {
-                sendForId(topic, body, headers);
-            }
-
-            /**
-             * The broker's message id as text (ledger:entry:partition), the same text a consumer gets from its message's id.
-             * Pulsar has no correlation field: a system that answers echoes it in a property or in the body.
-             */
-            @Override
-            public String sendForId(String topic, String body, Map<String, String> headers) throws Exception {
+                // The MessageId the broker answers with is not reported: Pulsar has no correlation field an arrival could
+                // carry it in, so a run could never match on it. A reply is recognised by a token in its body or in a property.
                 Producer<String> producer = producers.get(topic);
                 if (producer == null) {
                     try {
@@ -159,8 +152,7 @@ public class PulsarType implements TransportType {
                     if (name.equals("key")) message.key(value);
                     else message.property(name, value);
                 });
-                MessageId id = message.send();   // waits for the broker to store it
-                return id == null ? null : id.toString();
+                message.send();   // waits for the broker to store it
             }
 
             /**

@@ -125,7 +125,7 @@ class RabbitMqTypeTest {
         Channel channel = mock(Channel.class);
         when(connection.createChannel()).thenReturn(channel);
         AtomicReference<DefaultConsumer> consumer = new AtomicReference<>();
-        when(channel.basicConsume(eq("out"), eq(true), any(com.rabbitmq.client.Consumer.class))).thenAnswer(call -> {
+        when(channel.basicConsume(eq("out"), eq(false), any(com.rabbitmq.client.Consumer.class))).thenAnswer(call -> {
             consumer.set(call.getArgument(2));
             return "tag";
         });
@@ -157,7 +157,7 @@ class RabbitMqTypeTest {
         Channel channel = mock(Channel.class);
         when(connection.createChannel()).thenReturn(channel);
         AtomicReference<DefaultConsumer> consumer = new AtomicReference<>();
-        when(channel.basicConsume(eq("out"), eq(true), any(com.rabbitmq.client.Consumer.class))).thenAnswer(call -> {
+        when(channel.basicConsume(eq("out"), eq(false), any(com.rabbitmq.client.Consumer.class))).thenAnswer(call -> {
             consumer.set(call.getArgument(2));
             return "tag";
         });
@@ -173,6 +173,12 @@ class RabbitMqTypeTest {
                 .contentType("application/json").replyTo("replies").type("order.shipped").appId("warehouse").priority(5).expiration("60000").build();
         consumer.get().handleDelivery("tag", new Envelope(1, false, "", "out"), properties, "shipped".getBytes(StandardCharsets.UTF_8));
         consumer.get().handleDelivery("tag", new Envelope(2, false, "", "out"), new AMQP.BasicProperties(), "bare".getBytes(StandardCharsets.UTF_8));
+        // each is acknowledged once it has been handed over, never before: what was sent ahead and not handed over goes back to the queue at a close
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(channel);
+        order.verify(channel).basicQos(RabbitMqType.PREFETCH);
+        order.verify(channel).basicConsume(eq("out"), eq(false), any(com.rabbitmq.client.Consumer.class));
+        order.verify(channel).basicAck(1, false);
+        order.verify(channel).basicAck(2, false);
 
         TransportType.Arrival first = got.get(0), second = got.get(1);
         assertEquals("shipped", first.body());
@@ -196,7 +202,7 @@ class RabbitMqTypeTest {
 
         RabbitMqType.subscription(connection, "events/order.*", body -> { }, e -> { }).close();
         verify(channel).queueBind("amq.gen-1", "events", "order.*");
-        verify(channel).basicConsume(eq("amq.gen-1"), eq(true), any(com.rabbitmq.client.Consumer.class));
+        verify(channel).basicConsume(eq("amq.gen-1"), eq(false), any(com.rabbitmq.client.Consumer.class));
 
         // a queue that is not there is an error now, and the connection is not left open
         Connection other = mock(Connection.class);

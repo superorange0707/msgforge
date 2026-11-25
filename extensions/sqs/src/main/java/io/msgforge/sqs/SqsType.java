@@ -152,13 +152,9 @@ public class SqsType implements TransportType {
         return new Sender() {
             @Override
             public void send(String destination, String body, Map<String, String> headers) {
-                sendForId(destination, body, headers);
-            }
-
-            /** The MessageId of the service's answer. SQS has no correlation field: a system that answers echoes this id in an attribute or in the body. */
-            @Override
-            public String sendForId(String destination, String body, Map<String, String> headers) {
-                return sqs.sendMessage(request(queueUrl(sqs, destination, urls), body, headers)).messageId();
+                // The MessageId in the answer is not reported: SQS has no correlation field an arrival could carry it in,
+                // so a run could never match on it. A reply is recognised by a token in its body or in an attribute.
+                sqs.sendMessage(request(queueUrl(sqs, destination, urls), body, headers));
             }
 
             /**
@@ -208,6 +204,8 @@ public class SqsType implements TransportType {
                     List<Message> messages = sqs.receiveMessage(r -> r.queueUrl(url).maxNumberOfMessages(10).waitTimeSeconds(waitSeconds)
                             .messageAttributeNames("All")).messages();   // attributes only come when asked for
                     if (messages.isEmpty()) continue;
+                    // Handed over first, deleted after: a batch cut short by a close is not lost. What was not deleted
+                    // comes back when its visibility timeout has passed, so the worst case is a message seen twice.
                     messages.forEach(m -> onArrival.accept(new Arrival(m.body(), headers(m), null)));
                     int[] n = {0};
                     sqs.deleteMessageBatch(r -> r.queueUrl(url).entries(messages.stream()

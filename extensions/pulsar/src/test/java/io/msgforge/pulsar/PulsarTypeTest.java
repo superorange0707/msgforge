@@ -90,7 +90,7 @@ class PulsarTypeTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void aSendReturnsTheMessageIdAndAnArrivalCarriesItsPropertiesAndKey() throws Exception {
+    void anArrivalCarriesItsPropertiesAndKeyAndASendReportsNoId() throws Exception {
         PulsarClient client = mock(PulsarClient.class);
         ProducerBuilder<String> builder = mock(ProducerBuilder.class, RETURNS_SELF);
         Producer<String> producer = mock(Producer.class);
@@ -102,10 +102,10 @@ class PulsarTypeTest {
         when(stored.toString()).thenReturn("12:7:-1");
         when(message.send()).thenReturn(stored).thenReturn(null);
         TransportType.Sender sender = PulsarType.sender(client);
-        assertEquals("12:7:-1", sender.sendForId("shipments", "shipped", Map.of()), "the id the broker stored it under");
-        assertNull(sender.sendForId("shipments", "again", Map.of()), "and no id is made up when the client gives none");
+        // the broker stores it under an id, but no arrival could carry that back as a correlation id, so none is reported
+        assertNull(sender.sendForId("shipments", "shipped", Map.of()));
         sender.send("shipments", "plain", Map.of());
-        verify(message, org.mockito.Mockito.times(3)).send();   // a plain send sends once
+        verify(message, org.mockito.Mockito.times(2)).send();   // each sends once
 
         Reader<String> reader = mock(Reader.class);
         Message<String> keyed = mock(Message.class), bare = mock(Message.class);

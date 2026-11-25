@@ -150,13 +150,13 @@ class SqsTypeTest {
     }
 
     @Test
-    void aSendReturnsTheMessageIdAndAnArrivalCarriesItsAttributes() throws Exception {
+    void anArrivalCarriesItsAttributesAndASendReportsNoId() throws Exception {
         FakeSqs sqs = new FakeSqs();
         TransportType.Sender sender = SqsType.sender(sqs);
-        assertEquals("m-1", sender.sendForId("orders", "one", Map.of()), "the id in the service's answer");
-        assertEquals("m-2", sender.sendForId("orders", "two", Map.of()));
-        sender.send("orders", "three", Map.of());
-        assertEquals(3, sqs.sent.size(), "a plain send sends once");
+        // SQS answers a send with a MessageId, but no arrival could carry it back as a correlation id, so none is reported
+        assertNull(sender.sendForId("orders", "one", Map.of()));
+        sender.send("orders", "two", Map.of());
+        assertEquals(2, sqs.sent.size(), "each sends once");
 
         FakeSqs receiving = new FakeSqs();
         BlockingQueue<TransportType.Arrival> got = new LinkedBlockingQueue<>();

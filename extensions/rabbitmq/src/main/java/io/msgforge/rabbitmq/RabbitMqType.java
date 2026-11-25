@@ -201,6 +201,9 @@ public class RabbitMqType implements TransportType {
         };
     }
 
+    /** How many messages the broker may send ahead of their acknowledgement: enough not to slow receiving, few enough to hand back at a close. */
+    static final int PREFETCH = 200;
+
     /** Takes over the connection and closes it with the subscription. */
     static Subscription subscription(Connection connection, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws IOException {
         String queue;
@@ -216,10 +219,15 @@ public class RabbitMqType implements TransportType {
                 queue = channel.queueDeclare().getQueue();   // server-named, exclusive, deleted with the connection
                 channel.queueBind(queue, at[0], at[1]);
             }
-            channel.basicConsume(queue, true, new DefaultConsumer(channel) {
+            // Acknowledged one by one, after each has been handed over. With automatic acknowledgement the broker counts
+            // a message as taken when it has sent it, and whatever the client had been sent ahead and not yet handed over
+            // when the subscription closed was gone from the queue and seen by nobody. Unacknowledged, those go back.
+            channel.basicQos(PREFETCH);
+            channel.basicConsume(queue, false, new DefaultConsumer(channel) {
                 @Override
-                public void handleDelivery(String tag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) {
+                public void handleDelivery(String tag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) throws IOException {
                     onArrival.accept(new Arrival(new String(body, StandardCharsets.UTF_8), headers(properties), properties == null ? null : properties.getCorrelationId()));
+                    channel.basicAck(envelope.getDeliveryTag(), false);
                 }
 
                 @Override
