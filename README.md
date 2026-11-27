@@ -164,14 +164,14 @@ Password  ${MSGFORGE_MQ_PASSWORD}
 
 Only variables whose name starts with `MSGFORGE_` can be used this way. A connection can send what it is given to any address its author chooses, so a variable a connection may name is a variable anyone with access to the console can read; the rest of the environment is kept out of reach. To use names you already have, list them when starting msgforge: `MSGFORGE_ENV_ALLOW=MQ_*,KAFKA_PASSWORD` (comma-separated, `*` stands for any characters). A reference to any other name fails with a message that says so, and the variable is not read.
 
-The console never shows what a variable holds, with one exception made for names. A connection called `${MSGFORGE_ENV}` is shown as `SIT` where that is the variable's value, and a queue `ORDERS.${MSGFORGE_ENV}.IN` as `ORDERS.SIT.IN`. That is done only for the variables listed in `MSGFORGE_SHOW` (comma-separated names; `MSGFORGE_ENV` alone unless you say otherwise), and never for one that any connection uses in a password or another secret setting, listed or not. Every other `${…}` is shown as it is written. List only variables that hold a name.
+The console never shows what a variable holds, except for the variables you list in `MSGFORGE_SHOW`. A connection called `${MSGFORGE_ENV}` is then shown as `SIT` where that is the variable's value, a queue `ORDERS.${MSGFORGE_ENV}.IN` as `ORDERS.SIT.IN`, and a setting that is not secret, such as Hosts `${MSGFORGE_SIT_MQ_HOSTS}`, by its value on the environment's card under Settings › Environments (from 0.3.1). The list is comma-separated names in which `*` stands for any characters (`MSGFORGE_*_MQ_HOSTS`); it is `MSGFORGE_ENV` alone unless you say otherwise. A variable that any connection uses in a password or another secret setting is never shown, listed or not, and a password field always shows `••••••` or the variable it comes from. Every other `${…}` is shown as it is written. List only variables that hold a name, a host or something else that everyone who can open the console may read.
 
 A password typed in directly is stored in `msgforge.json` (owner-readable only, and git-ignored here).
 
 What msgforge does so that neither comes back out:
 
 - The API returns only the settings a connection's type declares, and of those never a secret one. A misspelt key in a hand-edited `msgforge.json` is not shown, and stays in the file only until that connection is next saved from the console, which writes the declared settings and drops the rest. A connection whose type is not installed (its plugin jar is gone) shows no settings at all.
-- Error messages from a connection show `${MSGFORGE_MQ_HOSTS}` where the value from the environment was, and `***` where a stored secret was, also when only a comma- or space-separated piece of the value appears, or in another letter case. This covers plugin types too. A type that encodes a value before quoting it is not covered.
+- Error messages from a connection show `${MSGFORGE_MQ_HOSTS}` where the value from the environment was (also for a variable `MSGFORGE_SHOW` lists), and `***` where a stored secret was, also when only a comma- or space-separated piece of the value appears, or in another letter case. This covers plugin types too. A type that encodes a value before quoting it is not covered.
 - Connection types and their client libraries may write non-secret settings, such as broker addresses, to the server log. Keep secrets in the fields marked as passwords.
 - A stored secret stays with the settings it was saved for. Change the type and it is dropped. Change another setting, such as the host or URL, and each stored secret has to be typed again or cleared; the save is refused until then. Renaming a connection or changing its destinations keeps it.
 
@@ -228,7 +228,7 @@ The image runs as a non-root user and keeps everything the console changes on th
 | `MSGFORGE_ENV_ALLOW` | environment variables a connection may name besides `MSGFORGE_*`, for example `MQ_*,KAFKA_*` | none | |
 | `MSGFORGE_REPORTS` | a folder: every run that ends is saved there as HTML, JSON and CSV | none | `/data/reports` |
 | `MSGFORGE_REPORTS_KEEP` | how many runs that folder keeps; older ones are removed | `50` | |
-| `MSGFORGE_SHOW` | variables whose value the console may show in the name of a connection or a queue | `MSGFORGE_ENV` | `MSGFORGE_ENV,MSGFORGE_REGION` |
+| `MSGFORGE_SHOW` | variables whose value the console may show: in the name of a connection or a queue, and in a setting that is not secret; `*` stands for any characters | `MSGFORGE_ENV` | `MSGFORGE_ENV,MSGFORGE_*_MQ_HOSTS` |
 | `MSGFORGE_THEME` | a `.css` file laid over the console's style sheet | none | `/app/theme.css` |
 | `MSGFORGE_TITLE` | what the console calls itself | `msgforge` | |
 | `MSGFORGE_ALLOWED_HOSTS` | host names the console answers to besides `localhost`, comma-separated; `*` for any | none | |
@@ -272,7 +272,24 @@ A scenario is a saved run you can start again with one click; the console calls 
 
 Its numbers (messages, rate, weights, timeout) are checked when it is saved. Its packs and connections are checked when it runs, so a scenario can be prepared before the pack or broker it needs exists.
 
-A preset names a connection, and the console sends to the environment chosen in the top right: when a preset is picked there, the connection of its first target is replaced by that environment wherever the preset names it, and Save as preset saves it that way. From the command line and the API a scenario runs on the connections it names.
+A preset names a connection, and the console sends to the environment chosen in the top right: when a preset is picked there, the connection of its first target is replaced by that environment wherever the preset names it, and Save as preset saves it that way. From the API a scenario runs on the connections it names; the command line does the same, or the console's replacement with `--env <connection>` (from 0.3.1).
+
+### Several environments in one msgforge
+
+An environment is a connection, so SIT, UAT and a local broker are three connections in one `msgforge.json`, picked in the top right. Where their queues are named differently, give each connection its own names for them in `vars`, and write the presets with those names (from 0.3.1):
+
+```json
+"connections": [
+  {"id": "sit", "name": "SIT", "type": "ibm-mq", "settings": {"hosts": "${MSGFORGE_SIT_MQ_HOSTS}", "password": "${MSGFORGE_SIT_MQ_PASSWORD}", "…": "…"},
+   "destinations": ["${Input}", "${Rejects}"], "vars": {"Input": "ORDERS.IN", "Rejects": "ORDERS.REJECT"}},
+  {"id": "uat", "name": "UAT", "type": "ibm-mq", "settings": {"…": "…"},
+   "destinations": ["${Input}", "${Rejects}"], "vars": {"Input": "UAT.ORDERS.IN", "Rejects": "UAT.ORDERS.REJECT"}}
+]
+```
+
+`${Input}` in a destination used with a connection (a target, an expectation, a watch, a monitor) is that connection's `Input`: a preset written for `sit` with `${Input}` sends to `UAT.ORDERS.IN` when UAT is picked. A var's value may itself be `${MSGFORGE_…}`. A name is letters, digits and `_`. Runs, reports and the console show the queue the environment has, and Settings › Environments lists the names in a Queues table, one column per environment. Editing a connection in the console keeps its vars; they are changed in the file. `msgforge run <scenario> --env uat` runs a scenario on another environment the same way, for a pipeline.
+
+With several environments in one console, everyone who can open it can send with every environment's credentials. Saved monitors take what arrives off their queue; one that should not start with the console (on a queue that other people test on, say) has `"start": false` and waits, stopped, for Start.
 
 ## Runs
 
@@ -338,7 +355,7 @@ bin/msgforge run "Order routing" --report build/msgforge.xml   # by name or id
 bin/msgforge list
 ```
 
-It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify and every send went out), `1` when a check failed or some sends failed, and `2` for anything else. `--report` writes JUnit XML, `--save <folder>` writes the run's report as HTML, JSON and CSV, `--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` replace the scenario's numbers, and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
+It reads the same `msgforge.json`, packs, plugins and settings as the console, opens no port, prints each check and exits `0` when the run passed (or had nothing to verify and every send went out), `1` when a check failed or some sends failed, and `2` for anything else. `--report` writes JUnit XML, `--save <folder>` writes the run's report as HTML, JSON and CSV, `--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` replace the scenario's numbers, `--env <connection>` runs it on another environment (see [Several environments](#several-environments-in-one-msgforge)), and `--url http://host:port` runs the scenario on a msgforge that is already running instead. [docs/ci.md](docs/ci.md) has the details and pipeline examples.
 
 ## Extending msgforge
 
@@ -393,11 +410,11 @@ To verify arrivals, add `"expect":{"connection":"…","destination":"…"}` to t
 A load run adds `"load":{"rampUpSeconds":…,"durationSeconds":…,"senders":…,"unlimited":…}`, `"invalid":{"percent":…,"kinds":[…],"expect":{…}}`, `"seed"`, `"watches":[{"connection":"…","destination":"…","buckets":[{"pointer":"/reason"}]}]` and `"raw":true`; `count` may then be 0. Each run in the list carries `failed`, `invalid`, `targetRate`, `actualRate`, `elapsedMs`, `latency`, `errors`, `seed` and `watched`, and a check also has `invalid`, `rejected` and `accepted`. [docs/load.md](docs/load.md) explains them.
 
 Runs: `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}` (one run with its series over time and watched destinations), `GET /api/runs/{id}/report?format=html|json|csv|series`, `DELETE /api/runs/{id}` (cancels, also while verifying).
-Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (keep it in `msgforge.json`, or not), `DELETE /api/monitors/{id}` (stop), `POST /api/monitors/{id}/start`.
+Monitors (each with `destination` as written; `watch.destination` has the connection's vars filled in): `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE /api/monitors/{id}/saved` (keep it in `msgforge.json`, or not), `DELETE /api/monitors/{id}` (stop), `POST /api/monitors/{id}/start`.
 Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.
-Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `POST /api/connections/{id}/check` (asks a saved connection's broker whether it is there, and remembers the answer), `GET /api/connections/status` (how each last did: at its last check, or when a run last opened it), `GET /api/types` (each with `canReceive`). A connection also has a `title` (its name with the variables listed in `MSGFORGE_SHOW` filled in) and `queues` (for each destination written with a variable, the name it stands for); both are for showing.
+Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `POST /api/connections/{id}/check` (asks a saved connection's broker whether it is there, and remembers the answer), `GET /api/connections/status` (how each last did: at its last check, or when a run last opened it), `GET /api/types` (each with `canReceive`). A connection also has a `title` (its name with the variables listed in `MSGFORGE_SHOW` filled in), `queues` (for each destination written with a variable or one of its `vars`, the name it stands for), `values` (each setting that is not secret and has a variable that may be shown, filled in) and `vars` (its own names, each as it may be shown); all four are for showing. A request without `vars` keeps the stored ones.
 The console itself: `GET /api/console` (`version`, `title`, whether a `theme` is set), `GET /theme.css`.
 Packs: `GET|POST /api/packs` (`POST` takes `id`, `name` and `fields`), `PUT|DELETE /api/packs/{id}`, `GET|PUT|DELETE /api/packs/{id}/templates/{name}`, `POST /api/preview`, `GET /api/generators`, `POST /api/recognise?pack={id}` (a sample as `text/plain` in; the template and the list of replacements with line, value, placeholder and, where a pack field was used, `field` out; nothing is saved; add `&fields=true` to have the pack's field choices replaced as well). A template `PUT` replaces; with the header `If-None-Match: *` it only creates, and answers 409 if a template of that name exists (in any letter case, where the file system ignores case).
 

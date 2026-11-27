@@ -731,6 +731,10 @@ class ApiTest {
         // the page links it after its own style sheet
         String page = mvc.perform(get("/index.html")).andReturn().getResponse().getContentAsString();
         assertTrue(page.indexOf("href=\"app.css\"") > 0 && page.indexOf("href=\"theme.css\"") > page.indexOf("href=\"app.css\""), "theme.css after app.css");
+        // the console's own files are asked for again after an upgrade, not taken from the browser's cache
+        for (String file : new String[] {"/app.js", "/app.css", "/index.html"}) {
+            mvc.perform(get(file)).andExpect(status().isOk()).andExpect(header().string("Cache-Control", containsString("no-cache")));
+        }
 
         // a connection's last check: asked for, remembered, listed by id
         mvc.perform(post("/api/connections/dry-run/check")).andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));

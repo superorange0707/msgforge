@@ -24,6 +24,7 @@ public class MsgforgeApplication {
 
               --report <file>          also write the result as JUnit XML, for a CI system to show
               --url http://host:port   run it on a msgforge that is already running, instead of here (also for list)
+              --env <connection>       run it on this environment (a connection's id or name) instead of its own
               --count <n>              send this many messages instead of the scenario's number
               --rate <r>               messages per second instead of the scenario's rate, 0 for as fast as possible
               --duration <s>           stop sending after this many seconds (with a count: whichever comes first)

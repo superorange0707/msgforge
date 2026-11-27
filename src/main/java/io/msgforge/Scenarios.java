@@ -35,8 +35,34 @@ public class Scenarios {
         }
     }
 
-    /** What the command line may replace in a scenario for one run. Null leaves the scenario's own. */
-    public record Overrides(Integer count, Double rate, Integer durationSeconds, Integer rampUpSeconds, Integer senders, Long seed, Double invalidPercent) {}
+    /**
+     * What the command line may replace in a scenario for one run. Null leaves the scenario's own. environment is a
+     * connection (its id, or its name or title): see {@link #on}.
+     */
+    public record Overrides(Integer count, Double rate, Integer durationSeconds, Integer rampUpSeconds, Integer senders, Long seed, Double invalidPercent,
+                            String environment) {
+
+        public Overrides(Integer count, Double rate, Integer durationSeconds, Integer rampUpSeconds, Integer senders, Long seed, Double invalidPercent) {
+            this(count, rate, durationSeconds, rampUpSeconds, senders, seed, invalidPercent, null);
+        }
+    }
+
+    /**
+     * The scenario on another environment, as the console runs a preset on the environment picked there: its first
+     * target's connection is replaced by the given one wherever it appears (targets, expectations, where invalid
+     * messages go, watches), and so is a blank one. Any other connection is left as it is. Destinations stay as they
+     * are written; a connection's own vars fill them in when the run starts.
+     */
+    static Scenario on(Scenario s, String connectionId) {
+        String main = s.targets() == null || s.targets().isEmpty() ? null : s.targets().get(0).connection();
+        java.util.function.UnaryOperator<String> here = c -> c == null || c.isBlank() || c.equals(main) ? connectionId : c;
+        java.util.function.UnaryOperator<Runs.Target> t = x -> x == null ? null : new Runs.Target(here.apply(x.connection()), x.destination());
+        return new Scenario(s.id(), s.name(),
+                s.parts() == null ? null : s.parts().stream().map(p -> new Runs.Part(p.pack(), p.template(), p.body(), p.weight(), p.vars(), t.apply(p.expect()))).toList(),
+                s.targets() == null ? null : s.targets().stream().map(t).toList(), s.mode(), s.count(), s.rate(), s.headers(), s.timeoutSeconds(), s.match(), s.load(),
+                s.invalid() == null ? null : new Faults.Spec(s.invalid().percent(), s.invalid().kinds(), t.apply(s.invalid().expect())), s.seed(),
+                s.watches() == null ? null : s.watches().stream().map(w -> new Runs.Watch(here.apply(w.connection()), w.destination(), w.buckets())).toList());
+    }
 
     private final ConfigStore store;
     private final Runs runs;
@@ -100,6 +126,7 @@ public class Scenarios {
         synchronized (this) {
             s = find(id);
         }
+        if (o.environment() != null) s = on(s, runs.environment(o.environment()));
         Runs.Load own = s.load() == null ? new Runs.Load(null, null, null, null) : s.load();
         Runs.Load load = new Runs.Load(o.rampUpSeconds() != null ? o.rampUpSeconds() : own.rampUpSeconds(),
                 o.durationSeconds() != null ? o.durationSeconds() : own.durationSeconds(), o.senders() != null ? o.senders() : own.senders(), own.unlimited());

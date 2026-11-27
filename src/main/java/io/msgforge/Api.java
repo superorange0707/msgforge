@@ -142,13 +142,13 @@ public class Api {
 
     @PostMapping("/connections")
     public Connections.View createConnection(@RequestBody Connections.Connection c) {
-        return connections.save(new Connections.Connection(null, c.name(), c.type(), c.settings(), c.destinations()));
+        return connections.save(new Connections.Connection(null, c.name(), c.type(), c.settings(), c.destinations(), c.vars()));
     }
 
     @PutMapping("/connections/{id}")
     public Connections.View updateConnection(@PathVariable String id, @RequestBody Connections.Connection c) {
         connections.get(id); // 404 rather than silently creating a new one
-        return connections.save(new Connections.Connection(id, c.name(), c.type(), c.settings(), c.destinations()));
+        return connections.save(new Connections.Connection(id, c.name(), c.type(), c.settings(), c.destinations(), c.vars()));
     }
 
     @DeleteMapping("/connections/{id}")

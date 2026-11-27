@@ -237,7 +237,10 @@ function fillEnvMenu() {
   menuItem(menu, 'Manage environments…', { click: () => go('settings', 'envs') });
 }
 function pickEnv(id) {
-  state.env = id; renderEnv(); remember();
+  state.env = id;
+  const watching = state.monitors.find(m => m.connectionId === id);   // the Rejects page follows the environment, where it has a monitor
+  if (watching) state.monitor = watching.id;
+  renderEnv(); renderRejects(); remember();
   if (state.mode === 'settings') renderEnvCards();
 }
 async function loadConnections() {
@@ -558,7 +561,7 @@ async function savePreset() {
     state.preset = saved.id; await loadScenarios(); toast('Saved');
   } catch (err) { failed(err); }
 }
-async function loadScenarios() { state.scenarios = await api('/scenarios'); renderPresets(); if (state.mode === 'settings') renderPresetTable(); }
+async function loadScenarios() { state.scenarios = await api('/scenarios'); renderPresets(); if (state.mode === 'settings') { renderPresetTable(); renderQueueTable(); } }
 
 // The run below the message: the one started here, or else the latest that was more than a single send.
 const liveId = () => state.runs.some(r => r.id === state.liveRun) ? state.liveRun : state.runs.find(r => r.count !== 1)?.id || null;
@@ -819,7 +822,11 @@ function openRun(id) { state.open = id; shownKey = null; try { history.replaceSt
 $('detail').addEventListener('close', () => { state.open = null; $('detailActs').dataset.for = ''; try { history.replaceState(null, '', location.pathname); } catch (_) {} });
 
 // ---- rejects: the monitors as a page
-const monitorName = m => m.name || showQ(m.connectionId, m.watch.destination);
+// A name two monitors share (one per environment, say) is told apart by the environment's.
+const monitorName = m => {
+  const name = m.name || showQ(m.connectionId, m.watch.destination);
+  return state.monitors.some(o => o !== m && (o.name || showQ(o.connectionId, o.watch.destination)) === name) ? name + ' · ' + (conn(m.connectionId)?.title || pretty(m.watch.connection)) : name;
+};
 const monitorAct = (m, path, method) => api('/monitors/' + m.id + path, { method }).then(loadMonitors, failed);
 function renderRejects() {
   const page = $('rejects'), list = state.monitors;
@@ -831,7 +838,7 @@ function renderRejects() {
     empty.append(el('span', '', 'No queue is being watched'), add);
     return page.replaceChildren(empty);
   }
-  if (!list.some(m => m.id === state.monitor)) state.monitor = list[0].id;
+  if (!list.some(m => m.id === state.monitor)) state.monitor = (list.find(m => m.connectionId === state.env) || list[0]).id;
   const m = list.find(x => x.id === state.monitor), w = m.watch, head = el('div', 'pagehead');
   if (list.length > 1) for (const other of list) {
     const b = el('button', 'chip pickone', monitorName(other)); b.setAttribute('aria-pressed', other.id === m.id);
@@ -867,6 +874,7 @@ async function loadMonitors() {
   if (asked !== monitorsAsked) return;
   state.monitors = answer; renderRejects();
   if (state.mode === 'settings' && state.page === 'monitors') renderMonitorTable();
+  if (state.mode === 'settings' && state.page === 'envs' && !$('queueTable').hidden) renderQueueTable();
 }
 let newBuckets = [];
 function openMonitorForm() {
@@ -940,13 +948,15 @@ function renderEnvCards() {
     if (s?.error) top.lastChild.title = s.error;
     const dl = el('dl'), type = state.types.find(t => t.id === c.type);
     for (const f of type?.fields || []) {
-      const value = c.settings[f.key], secret = c.secretsSet.includes(f.key);
-      if (value == null && !secret) continue;
-      // a value that comes from the environment is named, not shown; a stored secret is neither
-      const from = /^\$\{(\w+)\}$/.exec(value || ''), dd = el('dd', from ? 'from' : '', secret ? '••••••' : from ? 'from ' + from[1] : value);
+      const value = c.settings[f.key], secret = c.secretsSet.includes(f.key), shown = c.values?.[f.key];
+      if (value == null && !secret || shown === '') continue;   // nothing set, or a variable that is empty
+      // a value that comes from the environment is named, not shown, unless MSGFORGE_SHOW lists it; a secret is never shown
+      const name = secret ? c.secretsFrom?.[f.key] : shown == null && /^\$\{(\w+)\}$/.exec(value || '')?.[1];
+      const dd = el('dd', name ? 'from' : '', name ? 'from ' + name : secret ? '••••••' : shown ?? value);
       dd.title = secret ? '' : value; dl.append(el('dt', '', f.label), dd);
     }
-    if (c.destinations.length) { const dd = el('dd', '', c.destinations.map(d => showQ(c.id, d)).join(', ')); dd.title = dd.textContent; dl.append(el('dt', '', 'Queues'), dd); }
+    // the queues of an environment with vars are in the table below the cards, side by side with the others'
+    if (c.destinations.length && !Object.keys(c.vars || {}).length) { const dd = el('dd', '', c.destinations.map(d => showQ(c.id, d)).join(', ')); dd.title = dd.textContent; dl.append(el('dt', '', 'Queues'), dd); }
     const row = el('div', 'row'), test = el('button', 'btn', 'Test'), edit = el('button', 'ghost', 'Edit');
     test.onclick = async () => { test.disabled = true; test.textContent = 'Testing…'; await checkEnv(c.id); const now = state.status[c.id]; if (now && !now.ok) toast(now.error, true); };
     edit.onclick = () => openConn(c);
@@ -954,6 +964,24 @@ function renderEnvCards() {
     return card;
   }));
   if (!state.connections.length) $('envCards').append(el('div', 'card empty', 'No environment yet'));
+  renderQueueTable();
+}
+// The environments' own names for queues (their vars), one row per name and a column per environment, with what uses each name.
+function renderQueueTable() {
+  const envs = state.connections.filter(c => Object.keys(c.vars || {}).length), names = [...new Set(envs.flatMap(c => Object.keys(c.vars)))];
+  $('queueTable').hidden = !names.length;
+  if (!names.length) return;
+  const uses = name => {
+    const ref = '${' + name + '}', has = d => (d || '').includes(ref), users = [];
+    for (const s of state.scenarios) {
+      const ts = [...(s.targets || []), ...(s.parts || []).map(p => p.expect), s.invalid?.expect, ...(s.watches || [])].filter(Boolean);
+      if (ts.some(t => has(t.destination))) users.push(s.name);
+    }
+    for (const m of state.monitors) if (has(m.destination) || has(m.watch.destination)) users.push(m.name || 'monitor');
+    return [...new Set(users)].join(', ');
+  };
+  $('queueTable').replaceChildren(el('h4', '', 'Queues'), table(['Name', ...envs.map(c => c.title), 'Used for'], names.map(n => [
+    n, ...envs.map(c => c.vars[n] == null ? cell('dim', '–') : cell('', el('code', '', c.vars[n]))), cell('dim', uses(n))])));
 }
 let editing = null;
 const blankConnection = () => ({ id: null, name: '', type: (state.types.find(t => t.id !== 'dry-run' && t.fields.length) || state.types[0]).id, settings: {}, secretsSet: [], destinations: [] });

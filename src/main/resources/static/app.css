@@ -91,7 +91,7 @@ h4 label { cursor: inherit; }
 .field:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .field > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .field select, .field input { height: 28px; border: 0; outline: 0; background: none; font-weight: 550; font-variant-numeric: tabular-nums; }
-.field select { max-width: 150px; padding-right: 2px; cursor: pointer; text-overflow: ellipsis; }
+.field select { max-width: 150px; padding-right: 2px; cursor: pointer; text-overflow: ellipsis; field-sizing: content; }
 .field select option { color: #05263b; background: #fff; }
 .field input { width: 78px; padding: 0 2px; text-align: right; -moz-appearance: textfield; }
 .field input::-webkit-outer-spin-button, .field input::-webkit-inner-spin-button { -webkit-appearance: none; }
@@ -186,7 +186,7 @@ h4 label { cursor: inherit; }
 .switch[aria-checked="true"] .t { background: var(--accent); }
 .switch[aria-checked="true"] .t::after { left: 14px; }
 .list { display: flex; flex-direction: column; margin-top: 6px; }
-#sendForm .act { position: static; margin-top: 0; }
+#sendForm .act { position: static; }
 #sendForm .act::before { display: none; }
 .li { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 8px 0; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font-size: 12px; }
 .li:first-child { border-top: 0; }
@@ -263,7 +263,7 @@ tr.go-to td:first-child { border-radius: 8px 0 0 8px; padding-left: 8px; } tr.go
 .btn.danger { color: var(--bad); }
 .btn.danger:hover:not(:disabled) { border-color: var(--bad); }
 .btn.solid-danger { background: var(--bad); border-color: transparent; color: #fff; }
-.envs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.envs { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(300px, calc((100% - 24px) / 3)), 1fr)); gap: 12px; }
 .envcard { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .envcard.on { border-color: var(--accent-line); }
 .envcard .top2 { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -273,6 +273,9 @@ tr.go-to td:first-child { border-radius: 8px 0 0 8px; padding-left: 8px; } tr.go
 .envcard dd { margin: 0; font: 11.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .envcard dd.from { font-family: var(--sans); color: var(--muted); }
 .envcard .row { margin-top: auto; padding-top: 4px; }
+.big > h4 { font: 650 13px var(--sans); letter-spacing: -.003em; text-transform: none; color: var(--text); }
+.queues h4 { margin: 0 0 10px; }
+.queues td:last-child, .queues th:last-child { text-align: right; }
 .state { margin-left: auto; }
 .state.plain { margin: 0; }
 .typebadge { font: 650 10px var(--sans); padding: 2px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
@@ -314,6 +317,7 @@ tr.go-to td:first-child { border-radius: 8px 0 0 8px; padding-left: 8px; } tr.go
 .anchor { position: relative; }
 .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 250px; max-width: 360px; max-height: min(560px, calc(100vh - 110px)); overflow: auto; padding: 6px; border-radius: 12px; background: var(--pop); border: 1px solid var(--line-2); box-shadow: 0 24px 48px -16px rgba(0, 0, 0, .6); color: var(--text); color-scheme: inherit; }
 .menu.r { left: auto; right: 0; }
+#envMenu { max-width: 480px; }
 #insertMenu { position: fixed; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
 .menu .item .dot { margin-right: 2px; }

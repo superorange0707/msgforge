@@ -188,7 +188,7 @@ Each arrival in its list says which run it belonged to: a monitor shares the que
 ]
 ```
 
-`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, the Saved switch (when adding a reject queue, and in its row under Settings › Reject queues) writes it there, and switching it off takes it out (a monitor that is listening goes on listening). Stopping is a different thing: a saved monitor that is stopped stays in the file and in the list, shown as stopped with what it counted, starts again with the next start of msgforge, and can be started again before that (Start, where Stop was). A monitor that is not saved is gone when it is stopped, and a stopped one that is taken out of the file is gone too. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
+`connection` is a connection's id; `id`, `name` and `buckets` may be left out. `"start": false` keeps a saved monitor listed but stopped until somebody starts it (from 0.3.1): a monitor takes what arrives off its queue, which on a queue other people test on is theirs to decide. In the console, the Saved switch (when adding a reject queue, and in its row under Settings › Reject queues) writes it there, and switching it off takes it out (a monitor that is listening goes on listening). Stopping is a different thing: a saved monitor that is stopped stays in the file and in the list, shown as stopped with what it counted, starts again with the next start of msgforge, and can be started again before that (Start, where Stop was). A monitor that is not saved is gone when it is stopped, and a stopped one that is taken out of the file is gone too. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
 
 **A monitor that cannot listen** does not keep msgforge from starting. Saved monitors start after the console is up, one after the other on a thread of their own, and one whose broker does not answer (or whose connection is missing, or whose variable is not set) is listed as down with the reason. It tries again after 5, 10, 20, 40 and then every 60 seconds until it is up or stopped. The same happens when receiving breaks later: the monitor goes down, keeps what it counted, and comes back by itself. An entry that only an edit can mend (a bucket that is not a regular expression, no destination) is listed as down with what is wrong and is not retried. A monitor started by hand that cannot listen is refused with the reason and not created.
 
@@ -278,7 +278,7 @@ scrape_configs:
 
 ## Names from the environment
 
-A destination in a run, a scenario (targets, expectations, watches, the invalid destination) or a monitor may contain `${MSGFORGE_NAME}`, under the same rule as a connection's settings (`MSGFORGE_*`, or a name in `MSGFORGE_ENV_ALLOW`). It is filled in when the run starts, so one `msgforge.json` serves several environments. The console, the reports and the metrics show the text as written, except that the console shows a queue by the name it stands for when every variable in it is listed in `MSGFORGE_SHOW` (see the README). Unlike a setting, the resolved name is handed to the broker as a destination and may come back in a broker's error message, so a variable used for a destination should hold a name and nothing secret.
+A destination in a run, a scenario (targets, expectations, watches, the invalid destination) or a monitor may contain `${MSGFORGE_NAME}`, under the same rule as a connection's settings (`MSGFORGE_*`, or a name in `MSGFORGE_ENV_ALLOW`). It is filled in when the run starts, so one `msgforge.json` serves several environments. A destination may also use the connection's own `vars` (`${Input}`), filled in first, so one msgforge can hold several environments whose queues are named differently (README, "Several environments in one msgforge"). The console, the reports and the metrics show the text as written, except that the console shows a queue by the name it stands for when every variable in it is listed in `MSGFORGE_SHOW` (see the README). Unlike a setting, the resolved name is handed to the broker as a destination and may come back in a broker's error message, so a variable used for a destination should hold a name and nothing secret.
 
 ## A scenario with everything
 
@@ -341,7 +341,7 @@ The monitor and the scenario's `invalid.expect` and `watches` name the same queu
 bin/msgforge run "Order soak" --duration 600 --ramp-up 30 --senders 0 --seed 2026 --invalid 2 --save build/soak
 ```
 
-`--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` (a percentage) replace the scenario's own values for that run. The output adds a line with the average rate, the send times and the seed, and each different send error with its count.
+`--count`, `--rate`, `--duration`, `--ramp-up`, `--senders`, `--seed` and `--invalid` (a percentage) replace the scenario's own values for that run. `--env <connection>` (an id or a name, in any letter case) runs it on that environment: its first target's connection is replaced wherever the scenario names it, as the console does with a preset. The output adds a line with the average rate, the send times and the seed, and each different send error with its count.
 
 ## Tested and not tested
 

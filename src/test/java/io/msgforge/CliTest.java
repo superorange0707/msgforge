@@ -227,6 +227,41 @@ class CliTest {
     }
 
     @Test
+    void envRunsTheScenarioOnAnotherEnvironmentWithThatEnvironmentsQueues() throws Exception {
+        Path file = dir.resolve("envs.json");
+        Files.writeString(file, """
+                {"connections":[{"id":"c-sit","name":"SIT","type":"dry-run","destinations":["${Input}"],"vars":{"Input":"SIT.IN"}},
+                                {"id":"c-uat","name":"UAT","type":"dry-run","destinations":["${Input}"],"vars":{"Input":"UAT.IN"}}],
+                 "scenarios":[{"id":"loop","name":"Loop","count":2,"rate":0,
+                   "parts":[{"pack":"demo","template":"order.json","weight":1,"expect":{"connection":"c-sit","destination":"${Input}"}}],
+                   "targets":[{"connection":"c-sit","destination":"${Input}"}]}]}""");
+        String config = "--msgforge.config=" + file;
+        Result own = cli("run", "Loop", config);
+        assertEquals(0, own.code(), own.out());
+        assertTrue(own.out().contains("→ SIT / SIT.IN: sent 2, arrived 2"), own.out());
+        Result uat = cli("run", "Loop", "--env", "uat", config);
+        assertEquals(0, uat.code(), uat.out());
+        assertTrue(uat.out().contains("→ UAT / UAT.IN: sent 2, arrived 2"), uat.out());
+        Result none = cli("run", "Loop", "--env=prod", config);
+        assertEquals(2, none.code(), none.out());
+        assertTrue(none.out().contains("No environment prod") && none.out().contains("c-uat (UAT)"), none.out());
+
+        ConfigurableApplicationContext server = SpringApplication.run(MsgforgeApplication.class, "--server.port=0", config, "--msgforge.packs=packs",
+                "--msgforge.plugins=" + dir.resolve("no-plugins"), "--spring.artemis.embedded.enabled=false", "--spring.main.banner-mode=off");
+        try {
+            String url = "http://localhost:" + server.getEnvironment().getProperty("local.server.port");
+            Result remote = cli("run", "Loop", "--url", url, "--env", "c-uat");
+            assertEquals(0, remote.code(), remote.out());
+            assertTrue(remote.out().contains("→ UAT / UAT.IN: sent 2, arrived 2"), remote.out());
+            Result remoteNone = cli("run", "Loop", "--url", url, "--env", "prod");
+            assertEquals(2, remoteNone.code(), remoteNone.out());
+            assertTrue(remoteNone.out().contains("No environment prod"), remoteNone.out());
+        } finally {
+            SpringApplication.exit(server);
+        }
+    }
+
+    @Test
     void urlRunsTheScenarioOnARunningServer() throws Exception {
         ConfigurableApplicationContext server = SpringApplication.run(MsgforgeApplication.class, "--server.port=0",
                 "--msgforge.config=" + dir.resolve("msgforge.json"), "--msgforge.packs=packs", "--msgforge.plugins=" + dir.resolve("no-plugins"),

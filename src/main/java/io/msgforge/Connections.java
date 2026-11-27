@@ -17,10 +17,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 /**
@@ -35,17 +38,37 @@ public class Connections {
 
     private static final Pattern ENV = Pattern.compile("\\$\\{(\\w+)}");
 
-    public record Connection(String id, String name, String type, Map<String, String> settings, List<String> destinations) {}
+    /**
+     * vars are the connection's own names for things that differ from one environment to the next, queue names above
+     * all: ${Input} in a destination used with this connection stands for its vars' Input. With one entry per
+     * environment, each with its own vars, a scenario written with ${Input} sends to the right queue on whichever it
+     * runs on. A var's value may itself contain ${MSGFORGE_NAME}. Null in a request keeps the stored ones.
+     */
+    public record Connection(String id, String name, String type, Map<String, String> settings, List<String> destinations,
+                             @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, String> vars) {
+
+        public Connection(String id, String name, String type, Map<String, String> settings, List<String> destinations) {
+            this(id, name, type, settings, destinations, null);
+        }
+    }
+
+    private static final Logger log = LoggerFactory.getLogger(Connections.class);
+    static final int MAX_VARS = 50;
+    private static final Pattern VAR_NAME = Pattern.compile("\\w{1,40}");
 
     /** What the API returns: secret settings are blanked and listed in secretsSet instead. */
     /**
      * title is the name with the variables in it that may be shown filled in (see shown(): one file can then call its
-     * connection after the environment it runs in), and queues gives, for each destination written with such a variable, the name it stands
-     * for. Both are for showing; requests use what is written. Settings are never filled in for a view.
+     * connection after the environment it runs in), and queues gives, for each destination written with such a variable
+     * or with one of the connection's vars, the name it stands for. values does the same for a setting that is not
+     * secret, and vars gives each of the connection's vars as it may be shown. secretsFrom names the variable a secret
+     * setting is read from, where it is written as ${NAME} and nothing else: the name, never the value. All of these
+     * are for showing; settings holds what is written, and requests use what is written.
      */
     public record View(String id, String name, String type, String typeLabel, String summary,
                        Map<String, String> settings, List<String> secretsSet, List<String> destinations,
-                       String title, Map<String, String> queues) {}
+                       String title, Map<String, String> queues, Map<String, String> values, Map<String, String> vars,
+                       Map<String, String> secretsFrom) {}
 
     /**
      * How a saved connection last did: at its last check, or when a run last opened it. Nothing checks by itself: a
@@ -94,7 +117,7 @@ public class Connections {
     private String shown(String written) {
         if (!written.contains("${")) return written;
         Matcher m = ENV.matcher(written);
-        while (m.find()) if (!show.contains(m.group(1)) || secretNames().contains(m.group(1))) return written;
+        while (m.find()) if (show.stream().noneMatch(p -> p.matcher(m.group(1)).matches()) || secretNames().contains(m.group(1))) return written;
         try {
             return resolve(written);
         } catch (RuntimeException e) {
@@ -123,7 +146,7 @@ public class Connections {
 
     private final ConfigStore store;
     private final List<Pattern> envAllow;
-    private final java.util.Set<String> show;
+    private final List<Pattern> show;
     java.util.function.UnaryOperator<String> env = System::getenv;   // the environment; a test gives its own
     private final Map<String, TransportType> types = new LinkedHashMap<>();
     private final List<Connection> connections = new ArrayList<>();
@@ -140,10 +163,8 @@ public class Connections {
     public Connections(ConfigStore store, List<TransportType> types, @Value("${msgforge.env-allow:}") String[] envAllow,
                        @Value("${msgforge.show:MSGFORGE_ENV}") String[] show) {
         this.store = store;
-        this.show = Arrays.stream(show).map(String::trim).filter(n -> !n.isEmpty()).collect(Collectors.toUnmodifiableSet());
-        // MQ_* becomes a pattern in which * is the only special character
-        this.envAllow = Arrays.stream(envAllow).map(String::trim).filter(n -> !n.isEmpty())
-                .map(n -> Pattern.compile(Arrays.stream(n.split("\\*", -1)).map(Pattern::quote).collect(Collectors.joining(".*")))).toList();
+        this.show = patterns(show);
+        this.envAllow = patterns(envAllow);
         types.forEach(t -> this.types.put(t.id(), t));
         List<Connection> saved = store.read("connections", new TypeReference<List<Connection>>() {});
         if (saved != null) {
@@ -153,16 +174,22 @@ public class Connections {
                 Map<String, String> settings = new LinkedHashMap<>();
                 if (c.settings() != null) c.settings().forEach((key, value) -> { if (value != null) settings.put(key, value); });
                 TransportType type = this.types.get(c.type());
+                Map<String, String> vars = new LinkedHashMap<>();
+                if (c.vars() != null) c.vars().forEach((name, value) -> {
+                    if (name == null || value == null) return;
+                    if (VAR_NAME.matcher(name).matches()) vars.put(name, value);
+                    else log.warn("Connection {}: the var \"{}\" is left out: a var's name is letters, digits and _, at most 40", id, name);
+                });
                 connections.add(new Connection(id, c.name() == null || c.name().isBlank() ? id : c.name(), String.valueOf(c.type()),
                         type == null ? settings : type.migrate(settings),
-                        c.destinations() == null ? List.of() : c.destinations().stream().filter(Objects::nonNull).toList()));
+                        c.destinations() == null ? List.of() : c.destinations().stream().filter(Objects::nonNull).toList(), java.util.Collections.unmodifiableMap(vars)));
             }
         } else {
-            connections.add(new Connection("dry-run", "Dry run", "dry-run", Map.of(), List.of("DEMO.QUEUE")));
+            connections.add(new Connection("dry-run", "Dry run", "dry-run", Map.of(), List.of("DEMO.QUEUE"), Map.of()));
             if (this.types.containsKey("ibm-mq")) {
                 connections.add(new Connection("local-mq", "Local IBM MQ", "ibm-mq", Map.of(
                         "hosts", "localhost(1414)", "queueManager", "QM1", "channel", "DEV.APP.SVRCONN", "user", "app"),
-                        List.of("DEV.QUEUE.1", "DEV.QUEUE.2", "DEV.QUEUE.3")));
+                        List.of("DEV.QUEUE.1", "DEV.QUEUE.2", "DEV.QUEUE.3"), Map.of()));
             }
         }
     }
@@ -179,12 +206,26 @@ public class Connections {
         return view(find(id));
     }
 
+    /**
+     * The id of the connection a person means: its id, else the one whose name or title (the name as the console shows
+     * it) is the given text in any letter case. Two of the same name are not guessed between.
+     */
+    public synchronized String idOf(String wanted) {
+        String w = wanted == null ? "" : wanted.trim();
+        if (indexOf(w) >= 0) return w;
+        List<String> named = connections.stream().filter(c -> c.name().equalsIgnoreCase(w) || shown(c.name()).equalsIgnoreCase(w)).map(Connection::id).toList();
+        if (named.size() == 1) return named.get(0);
+        String known = connections.stream().map(c -> c.id() + (shown(c.name()).equals(c.id()) ? "" : " (" + shown(c.name()) + ")")).collect(Collectors.joining(", "));
+        if (named.isEmpty()) throw new IllegalArgumentException("No environment " + w + ". There are: " + (known.isEmpty() ? "none" : known));
+        throw new IllegalArgumentException(named.size() + " environments are called " + w + ". Use the id of one: " + String.join(", ", named));
+    }
+
     /** Creates (blank id) or replaces a connection. */
     public synchronized View save(Connection incoming) {
         Connection c = clean(incoming);
         int at = c.id() == null ? -1 : indexOf(c.id());
         if (at < 0) {
-            c = new Connection(UUID.randomUUID().toString().substring(0, 8), c.name(), c.type(), c.settings(), c.destinations());
+            c = new Connection(UUID.randomUUID().toString().substring(0, 8), c.name(), c.type(), c.settings(), c.destinations(), c.vars());
             connections.add(c);
         } else {
             connections.set(at, c);
@@ -540,7 +581,8 @@ public class Connections {
         }
         LinkedHashSet<String> destinations = new LinkedHashSet<>();
         if (in.destinations() != null) in.destinations().stream().filter(d -> d != null && !d.isBlank()).map(String::trim).forEach(destinations::add);
-        return new Connection(at < 0 ? null : in.id(), in.name().trim(), in.type(), settings, List.copyOf(destinations));
+        return new Connection(at < 0 ? null : in.id(), in.name().trim(), in.type(), settings, List.copyOf(destinations),
+                in.vars() == null ? at < 0 ? Map.of() : connections.get(at).vars() : vars(in.vars()));
     }
 
     /**
@@ -576,23 +618,67 @@ public class Connections {
         });
     }
 
+    /** A request's vars, checked. Kept in the order given, so the console lists them as they were written. */
+    private static Map<String, String> vars(Map<String, String> given) {
+        if (given.size() > MAX_VARS) throw new IllegalArgumentException("At most " + MAX_VARS + " vars");
+        Map<String, String> out = new LinkedHashMap<>();
+        given.forEach((name, value) -> {
+            if (name == null || !VAR_NAME.matcher(name).matches()) throw new IllegalArgumentException("A var's name is letters, digits and _, at most 40: " + name);
+            if (value == null || value.isBlank()) throw new IllegalArgumentException("The var " + name + " has no value");
+            out.put(name, value.trim());
+        });
+        return java.util.Collections.unmodifiableMap(out);
+    }
+
+    /**
+     * A destination as the given connection writes it: each ${name} that is one of the connection's vars replaced by
+     * the var's value, which may contain ${MSGFORGE_NAME} in its turn (that is left for {@link #resolve(String)}).
+     * Anything else stays as it is, and so does all of it when there is no such connection.
+     */
+    public synchronized String expand(String id, String written) {
+        int at = indexOf(id);
+        if (at < 0 || written == null || !written.contains("${")) return written;
+        return expand(connections.get(at), written);
+    }
+
+    private static String expand(Connection c, String written) {
+        if (c.vars() == null || c.vars().isEmpty() || !written.contains("${")) return written;
+        return ENV.matcher(written).replaceAll(r -> Matcher.quoteReplacement(c.vars().getOrDefault(r.group(1), r.group())));
+    }
+
+    /** A destination used with the given connection, filled in: its vars, then the environment. */
+    public String resolve(String id, String written) {
+        return resolve(expand(id, written));
+    }
+
     private View view(Connection c) {
         TransportType type = types.get(c.type());
         // Without the type there is no telling which settings are secret, so none are shown.
         Map<String, String> queues = new LinkedHashMap<>();
-        for (String d : c.destinations()) if (!shown(d).equals(d)) queues.put(d, shown(d));
-        if (type == null) return new View(c.id(), c.name(), c.type(), c.type() + " (not installed)", "", Map.of(), List.of(), c.destinations(), shown(c.name()), queues);
+        for (String d : c.destinations()) if (!shown(expand(c, d)).equals(d)) queues.put(d, shown(expand(c, d)));
+        Map<String, String> vars = new LinkedHashMap<>();
+        if (c.vars() != null) c.vars().forEach((name, value) -> vars.put(name, shown(value)));
+        if (type == null) return new View(c.id(), c.name(), c.type(), c.type() + " (not installed)", "", Map.of(), List.of(), c.destinations(), shown(c.name()), queues, Map.of(), vars, Map.of());
         // Only what the type declares, and of that only what is not secret. A setting the type does not know
         // (a misspelt key in a hand-written file, a secret an older plugin version called something else) stays here.
-        Map<String, String> shown = new LinkedHashMap<>();
+        Map<String, String> shown = new LinkedHashMap<>(), values = new LinkedHashMap<>(), secretsFrom = new LinkedHashMap<>();
         List<String> secretsSet = new ArrayList<>();
         for (TransportType.Field f : type.fields()) {
             String value = c.settings().get(f.key());
             if (value == null) continue;
-            if (f.secret()) secretsSet.add(f.key());
-            else shown.put(f.key(), value);
+            if (f.secret()) {
+                secretsSet.add(f.key());
+                Matcher whole = ENV.matcher(value);
+                if (whole.matches()) secretsFrom.put(f.key(), whole.group(1));
+            } else {
+                shown.put(f.key(), value);
+                // the same rule as a name: filled in only from variables listed in MSGFORGE_SHOW that no secret uses
+                if (!shown(value).equals(value)) values.put(f.key(), shown(value));
+            }
         }
-        return new View(c.id(), c.name(), c.type(), type.label(), type.summary(c.settings()), shown, secretsSet, c.destinations(), shown(c.name()), queues);
+        Map<String, String> summarised = new LinkedHashMap<>(c.settings());
+        summarised.putAll(values);   // a summary that would show a variable's value has it only where the value may be shown
+        return new View(c.id(), c.name(), c.type(), type.label(), type.summary(summarised), shown, secretsSet, c.destinations(), shown(c.name()), queues, values, vars, secretsFrom);
     }
 
     private Connection find(String id) {
@@ -608,5 +694,11 @@ public class Connections {
 
     private void persist() {
         store.write("connections", connections);
+    }
+
+    /** Names in which * stands for any characters and nothing else is special: MQ_* matches MQ_HOSTS. */
+    private static List<Pattern> patterns(String[] names) {
+        return Arrays.stream(names).map(String::trim).filter(n -> !n.isEmpty())
+                .map(n -> Pattern.compile(Arrays.stream(n.split("\\*", -1)).map(Pattern::quote).collect(Collectors.joining(".*")))).toList();
     }
 }

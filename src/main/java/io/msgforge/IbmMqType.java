@@ -74,7 +74,7 @@ public class IbmMqType implements TransportType {
     @Override
     public String summary(Map<String, String> s) {
         String qm = s.getOrDefault("queueManager", "");
-        return (qm.isBlank() ? "" : qm + " @ ") + s.getOrDefault("hosts", "") + (s.containsKey("cipherSuite") ? " · TLS" : "");
+        return (qm.isBlank() ? "" : qm + " @ ") + s.getOrDefault("hosts", "") + (s.getOrDefault("cipherSuite", "").isBlank() ? "" : " · TLS");
     }
 
     @Override

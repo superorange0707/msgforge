@@ -53,6 +53,8 @@ export MSGFORGE_KAFKA_PASSWORD="…"                # from the pipeline's secret
 "$RUNNER_TEMP/msgforge-0.3.0/bin/msgforge" run "Order routing" --report build/test-results/msgforge.xml
 ```
 
+A `msgforge.json` that holds several environments (README, "Several environments in one msgforge") runs a scenario on one of them with `--env`, for example `run "Order routing" --env uat` (from 0.3.1); the pipeline then needs only that environment's variables and secrets.
+
 `$RUNNER_TEMP` stands for any scratch folder. The bundled `plugins/` folder, with Kafka, is used unless `MSGFORGE_PLUGINS` says otherwise.
 
 ## Shell, with Docker

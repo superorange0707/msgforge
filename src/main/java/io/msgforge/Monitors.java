@@ -50,16 +50,28 @@ public class Monitors {
         }
     }
 
-    /** A monitor as the configuration file holds it. The destination may contain ${MSGFORGE_NAME}. */
-    public record Saved(String id, String name, String connection, String destination, List<Observer.Bucket> buckets) {}
+    /**
+     * A monitor as the configuration file holds it. The destination may contain ${MSGFORGE_NAME} and the connection's
+     * own vars. start false keeps it listed, stopped, until somebody starts it: a monitor takes what arrives off the
+     * queue, which on a queue that others use too is for whoever is testing there to decide. Null or true starts it
+     * with the console, as before.
+     */
+    public record Saved(String id, String name, String connection, String destination, List<Observer.Bucket> buckets,
+                        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean start) {
+
+        public Saved(String id, String name, String connection, String destination, List<Observer.Bucket> buckets) {
+            this(id, name, connection, destination, buckets, null);
+        }
+    }
 
     /**
      * state is "starting" (not tried yet), "up", "down" or "stopped" (a saved one that was stopped by hand, or any one that
      * stopped itself because the broker refused its credentials: that one has an error). A monitor that is down has the
      * reason in error and, unless the reason is something only an edit can mend, the time of its next attempt in retryAt.
+     * destination is as written (watch has it with the connection's vars filled in).
      */
     public record View(String id, String name, String connectionId, Instant startedAt, String state, String error, Instant retryAt,
-                       boolean saved, Observer.View watch) {}
+                       boolean saved, Observer.View watch, String destination) {}
 
     private static final class Monitor {
         final String id, name, connectionId, destination;
@@ -67,6 +79,7 @@ public class Monitors {
         final Instant startedAt = Instant.now();
         final Observer observer;
         final boolean mendable;   // false: what is wrong is in the saved entry itself, and trying again would not help
+        volatile boolean byHand;  // saved with start false: not started with the console
         volatile boolean saved, stopped;
         volatile String state = "starting", error;
         volatile Instant retryAt;
@@ -75,7 +88,7 @@ public class Monitors {
         int attempts;
         long breaks;   // counts the times receiving broke, so a connect can tell that it broke while it was still connecting
 
-        Monitor(String id, String name, String connectionId, String destination, List<Observer.Bucket> buckets, String shownConnection, boolean saved) {
+        Monitor(String id, String name, String connectionId, String destination, List<Observer.Bucket> buckets, String shownConnection, String shownDestination, boolean saved) {
             this.id = id;
             this.name = name;
             this.connectionId = connectionId;
@@ -84,9 +97,9 @@ public class Monitors {
             Observer made;
             String wrong = connectionId.isBlank() ? "This saved monitor names no connection" : destination.isBlank() ? "This saved monitor names no destination" : null;
             try {
-                made = new Observer(shownConnection, destination, buckets);
+                made = new Observer(shownConnection, shownDestination, buckets);
             } catch (IllegalArgumentException e) {   // a hand-written entry: it is listed with what is wrong, not dropped
-                made = new Observer(shownConnection, destination, List.of());
+                made = new Observer(shownConnection, shownDestination, List.of());
                 wrong = e.getMessage();
                 buckets = List.of();
             }
@@ -100,7 +113,7 @@ public class Monitors {
         }
 
         View view() {
-            return new View(id, name, connectionId, startedAt, state, error, retryAt, saved, observer.view(true));
+            return new View(id, name, connectionId, startedAt, state, error, retryAt, saved, observer.view(true), destination);
         }
     }
 
@@ -137,7 +150,15 @@ public class Monitors {
             String connection = s.connection() == null ? "" : s.connection().trim(), destination = s.destination() == null ? "" : s.destination().trim();
             String name = s.name() == null || s.name().isBlank() ? null : s.name().trim();
             if (name != null && name.length() > MAX_NAME) name = name.substring(0, MAX_NAME);
-            monitors.add(new Monitor(id, name, connection, destination, s.buckets(), shown(connection), true));
+            Monitor m = new Monitor(id, name, connection, destination, s.buckets(), shown(connection), connections.expand(connection, destination), true);
+            if (Boolean.FALSE.equals(s.start())) {
+                m.byHand = true;
+                if (m.mendable) {
+                    m.stopped = true;
+                    m.state = "stopped";
+                }
+            }
+            monitors.add(m);
         }
     }
 
@@ -177,14 +198,15 @@ public class Monitors {
         if (r.destination() == null || r.destination().isBlank()) throw new IllegalArgumentException("Destination is required");
         Connections.View c = connections.get(r.connection());
         if (!connections.canReceive(c.id())) throw new IllegalArgumentException(c.name() + " is a " + c.typeLabel() + " connection, which cannot receive.");
-        String destination = r.destination().trim(), resolved = connections.resolve(destination);
+        String destination = r.destination().trim(), resolved = connections.resolve(c.id(), destination);
         boolean save = Boolean.TRUE.equals(r.save());
         if (save && store == null) throw new IllegalArgumentException("There is no configuration file to save a monitor in");
-        Monitor m = new Monitor(UUID.randomUUID().toString().substring(0, 8), name(r.name()), c.id(), destination, Observer.check(r.buckets()), c.name(), false);
+        Monitor m = new Monitor(UUID.randomUUID().toString().substring(0, 8), name(r.name()), c.id(), destination, Observer.check(r.buckets()), c.name(),
+                connections.expand(c.id(), destination), false);
         synchronized (monitors) {
             if (monitors.size() >= MAX) throw new IllegalArgumentException("At most " + MAX + " monitors. Stop one first.");
             for (Monitor other : monitors) {
-                if (other.connectionId.equals(c.id()) && (other.destination.equals(destination) || resolved.equals(resolvedOrNull(other.destination)))) {
+                if (other.connectionId.equals(c.id()) && (other.destination.equals(destination) || resolved.equals(resolvedOrNull(c.id(), other.destination)))) {
                     throw new IllegalArgumentException("A monitor is already on " + c.name() + " / " + destination);
                 }
             }
@@ -206,9 +228,9 @@ public class Monitors {
         return m.view();
     }
 
-    private String resolvedOrNull(String destination) {
+    private String resolvedOrNull(String connectionId, String destination) {
         try {
-            return connections.resolve(destination);
+            return connections.resolve(connectionId, destination);
         } catch (RuntimeException e) {
             return null;
         }
@@ -223,7 +245,7 @@ public class Monitors {
         }
         Connections.View c = connections.get(m.connectionId);
         if (!connections.canReceive(c.id())) throw new IllegalArgumentException(c.name() + " is a " + c.typeLabel() + " connection, which cannot receive.");
-        TransportType.Subscription s = connections.share(c.id(), connections.resolve(m.destination), a -> m.observer.arrived(a, null), error -> broke(m, "Receiving failed: " + error));
+        TransportType.Subscription s = connections.share(c.id(), connections.resolve(c.id(), m.destination), a -> m.observer.arrived(a, null), error -> broke(m, "Receiving failed: " + error));
         boolean keep;
         synchronized (m) {
             keep = !m.stopped && m.breaks == before;   // not stopped, and not broken again, while the broker was answering
@@ -354,7 +376,7 @@ public class Monitors {
     private void persist() {
         if (store == null) return;
         synchronized (monitors) {
-            store.write("monitors", monitors.stream().filter(m -> m.saved).map(m -> new Saved(m.id, m.name, m.connectionId, m.destination, m.buckets)).toList());
+            store.write("monitors", monitors.stream().filter(m -> m.saved).map(m -> new Saved(m.id, m.name, m.connectionId, m.destination, m.buckets, m.byHand ? false : null)).toList());
         }
     }
 

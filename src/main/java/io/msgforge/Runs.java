@@ -708,6 +708,11 @@ public class Runs {
         });
     }
 
+    /** The id of the connection a person names as an environment ({@link Connections#idOf}). */
+    String environment(String wanted) {
+        return connections.idOf(wanted);
+    }
+
     public View start(Request req) {
         List<Part> wanted = req.parts() != null && !req.parts().isEmpty() ? req.parts()
                 : List.of(new Part(req.pack(), req.template(), req.body(), 1, null, req.expect()));
@@ -726,8 +731,10 @@ public class Runs {
         for (Target t : asked) {
             if (t.connection() == null || t.connection().isBlank()) throw new IllegalArgumentException("Connection is required");
             if (t.destination() == null || t.destination().isBlank()) throw new IllegalArgumentException("Destination is required");
-            targets.add(new TargetView(t.connection(), connections.get(t.connection()).name(), t.destination().trim()));
-            destinations.add(connections.resolve(t.destination().trim()));
+            // a connection's own var is filled in here, so the run, its report and its watches name the queue the environment has
+            String written = connections.expand(t.connection(), t.destination().trim());
+            targets.add(new TargetView(t.connection(), connections.get(t.connection()).name(), written));
+            destinations.add(connections.resolve(written));
         }
 
         Map<String, String> headers = req.headers() == null ? Map.of() : Map.copyOf(req.headers());
@@ -846,7 +853,7 @@ public class Runs {
         if (!connections.canReceive(c.id())) {
             throw new IllegalArgumentException(c.name() + " is a " + c.typeLabel() + " connection, which cannot receive. Expect the messages on another connection.");
         }
-        TargetView where = new TargetView(c.id(), c.name(), t.destination().trim());
+        TargetView where = new TargetView(c.id(), c.name(), connections.expand(c.id(), t.destination().trim()));
         int at = watches.indexOf(where);
         if (at >= 0) return at;
         watches.add(where);

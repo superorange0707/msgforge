@@ -27,7 +27,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 /**
  * msgforge without the console: run a saved scenario and exit with its verdict, for a pipeline.
  *
- *   run <scenario> [--report file] [--save dir] [--url http://host:port] [--count n] [--rate r]
+ *   run <scenario> [--report file] [--save dir] [--url http://host:port] [--env connection] [--count n] [--rate r]
  *                  [--duration s] [--ramp-up s] [--senders n] [--seed n] [--invalid percent]
  *   list [--url http://host:port]
  *
@@ -80,7 +80,7 @@ final class Cli {
     }
 
     private int execute(String[] args) {
-        String command = command(args), scenario = null, report = null, save = null, url = null;
+        String command = command(args), scenario = null, report = null, save = null, url = null, env = null;
         boolean commandSeen = false;
         Integer count = null, duration = null, rampUp = null, senders = null;
         Double rate = null, invalid = null;
@@ -93,12 +93,13 @@ final class Cli {
                     continue;
                 }
                 String a = args[i], name = a.contains("=") ? a.substring(0, a.indexOf('=')) : a;
-                boolean ours = List.of("--report", "--save", "--url", "--count", "--rate", "--duration", "--ramp-up", "--senders", "--seed", "--invalid").contains(name);
+                boolean ours = List.of("--report", "--save", "--url", "--count", "--rate", "--duration", "--ramp-up", "--senders", "--seed", "--invalid", "--env").contains(name);
                 String value = !ours ? null : a.contains("=") ? a.substring(a.indexOf('=') + 1) : ++i < args.length ? args[i] : null;
                 if (ours && value == null) throw new IllegalArgumentException(name + " needs a value");
                 switch (name) {
                     case "--report" -> report = value;
                     case "--url" -> url = value.replaceAll("/+$", "");
+                    case "--env" -> env = value;
                     case "--count" -> count = number(name, value, Integer::valueOf);
                     case "--rate" -> rate = number(name, value, Double::valueOf);
                     case "--save" -> save = value;
@@ -120,7 +121,7 @@ final class Cli {
             return ERROR;
         }
         Path reportFile = report == null ? null : workdir().resolve(report), saveDir = save == null ? null : workdir().resolve(save);
-        Scenarios.Overrides overrides = new Scenarios.Overrides(count, rate, duration, rampUp, senders, seed, invalid);
+        Scenarios.Overrides overrides = new Scenarios.Overrides(count, rate, duration, rampUp, senders, seed, invalid, env);
 
         Backend backend;
         try {
@@ -384,6 +385,19 @@ final class Cli {
                 }
             }
 
+            /** The same choice as {@link Connections#idOf}, made from the server's list. */
+            String environment(String wanted) throws Exception {
+                List<JsonNode> all = new ArrayList<>();
+                call("GET", "/api/connections", null).forEach(all::add);
+                for (JsonNode c : all) if (c.path("id").asText().equals(wanted)) return wanted;
+                List<String> named = all.stream().filter(c -> c.path("name").asText().equalsIgnoreCase(wanted) || c.path("title").asText().equalsIgnoreCase(wanted))
+                        .map(c -> c.path("id").asText()).toList();
+                if (named.size() == 1) return named.get(0);
+                if (named.isEmpty()) throw new IllegalArgumentException("No environment " + wanted + " on " + url + ". There are: "
+                        + String.join(", ", all.stream().map(c -> c.path("id").asText() + " (" + c.path("title").asText(c.path("name").asText()) + ")").toList()));
+                throw new IllegalArgumentException(named.size() + " environments on " + url + " are called " + wanted + ". Use the id of one: " + String.join(", ", named));
+            }
+
             public List<JsonNode> scenarios() throws Exception {
                 List<JsonNode> list = new ArrayList<>();
                 call("GET", "/api/scenarios", null).forEach(list::add);
@@ -392,6 +406,7 @@ final class Cli {
 
             /** The scenario as a run request, which is what the server does with it too; this way the options fit in. */
             public JsonNode start(JsonNode scenario, Scenarios.Overrides o) throws Exception {
+                if (o.environment() != null) scenario = json.valueToTree(Scenarios.on(json.treeToValue(scenario, Scenarios.Scenario.class), environment(o.environment())));
                 ObjectNode request = scenario.deepCopy();
                 request.put("label", scenario.path("name").asText());
                 request.remove(List.of("id", "name"));
