@@ -207,6 +207,10 @@ h4 label { cursor: inherit; }
 .mixrow .x svg { width: 12px; height: 12px; }
 .mixrow:focus-within { border-color: var(--accent-line); }
 .mixrow .chiprow { grid-column: 1 / -1; margin: 0 0 2px; }
+/* a mix row: the template as wide as its name (no arrow, like the code it is), the weight, and where it is expected in the rest */
+.mixrow:not(.trow) { grid-template-columns: auto 26px minmax(0, 1fr) 22px; gap: 5px; }
+.mixrow:not(.trow) > select { -webkit-appearance: none; appearance: none; field-sizing: content; width: auto; max-width: 150px; padding: 0; cursor: pointer; }
+.mixrow:not(.trow) .to { text-align: right; }
 .add { height: 30px; width: 100%; border: 1px dashed var(--line-2); border-radius: 9px; background: none; color: var(--muted); font-size: 12px; }
 .add:hover { color: var(--accent); border-color: var(--accent-line); }
 .more { border-top: 1px solid var(--line); padding-top: 10px; }
