@@ -2,8 +2,12 @@ spring:
   web:
     resources:
       cache:
+        # The jar dates every file to 1980, so Last-Modified would tell a browser holding an older version's files
+        # that they are still current. Without it, and with no-cache, they are fetched again; the page also links
+        # them under a name that changes with their content (Console.page).
+        use-last-modified: false
         cachecontrol:
-          no-cache: true   # the console's files are asked for again after an upgrade, not taken from the browser's cache
+          no-cache: true
 
 server:
   address: 127.0.0.1   # no login: keep it off the network. A container sets SERVER_ADDRESS=0.0.0.0 behind its own access control.

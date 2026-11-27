@@ -730,10 +730,22 @@ class ApiTest {
         mvc.perform(get("/theme.css").header("Host", "evil.example")).andExpect(status().isForbidden());
         // the page links it after its own style sheet
         String page = mvc.perform(get("/index.html")).andReturn().getResponse().getContentAsString();
-        assertTrue(page.indexOf("href=\"app.css\"") > 0 && page.indexOf("href=\"theme.css\"") > page.indexOf("href=\"app.css\""), "theme.css after app.css");
-        // the console's own files are asked for again after an upgrade, not taken from the browser's cache
-        for (String file : new String[] {"/app.js", "/app.css", "/index.html"}) {
-            mvc.perform(get(file)).andExpect(status().isOk()).andExpect(header().string("Cache-Control", containsString("no-cache")));
+        assertTrue(page.indexOf("href=\"app.css?v=") > 0 && page.indexOf("href=\"theme.css\"") > page.indexOf("href=\"app.css?v="), "theme.css after app.css");
+        // After an upgrade the browser gets the new console. A browser that kept an older version's files sends the
+        // validators it was given; in a jar every file is dated 1980, so a date says nothing: it must get the new bytes.
+        String later = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC).plusDays(1));
+        for (String file : new String[] {"/app.js", "/app.css", "/index.html", "/"}) {
+            var r = mvc.perform(get(file).header("If-Modified-Since", later)).andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control", containsString("no-cache"))).andReturn().getResponse();
+            assertTrue(r.getContentAsString().length() > 100, file);
+            assertEquals(null, r.getHeader("Last-Modified"), file);
+        }
+        // and the page names its script and style sheet by their content, so an older copy is not even asked about
+        String hash = Console.hash(new String(getClass().getClassLoader().getResourceAsStream("static/app.js").readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                + "\n" + new String(getClass().getClassLoader().getResourceAsStream("static/app.css").readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+        for (String at : new String[] {"/", "/index.html"}) {
+            String html = mvc.perform(get(at)).andReturn().getResponse().getContentAsString();
+            assertTrue(html.contains("src=\"app.js?v=" + hash + "\"") && html.contains("href=\"app.css?v=" + hash + "\""), html.substring(0, 600));
         }
 
         // a connection's last check: asked for, remembered, listed by id
@@ -756,6 +768,7 @@ class ApiTest {
         // and only a variable listed to be shown: one a connection may use is not thereby one the console gives out
         JsonNode kept = sent(post("/api/connections"), "{\"name\":\"${MSGFORGE_CONFIG} ${JAVA_HOME}\",\"type\":\"dry-run\",\"destinations\":[\"${MSGFORGE_CONFIG}\"]}");
         assertEquals("${MSGFORGE_CONFIG} ${JAVA_HOME}", kept.get("title").asText());
+        assertFalse(Console.hash("a").equals(Console.hash("b")));
         assertEquals(0, kept.get("queues").size());
         mvc.perform(delete("/api/connections/" + kept.get("id").asText())).andExpect(status().isOk());
         mvc.perform(delete("/api/connections/" + made.get("id").asText())).andExpect(status().isOk());

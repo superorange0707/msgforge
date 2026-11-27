@@ -34,6 +34,44 @@ public class Console {
         this.title = title == null || title.isBlank() ? null : title.trim().length() > 40 ? title.trim().substring(0, 40) : title.trim();
     }
 
+    /**
+     * The page, with its script and style sheet linked under a name that changes with their content
+     * (app.js?v=1a2b3c4d5e6f). A browser that kept the files of an older version asks for the new ones by their new
+     * name instead of being told that what it has is still good: the jar dates every file to 1980, so a validator
+     * could never tell two versions apart. The page itself is never kept.
+     */
+    @GetMapping({"/", "/index.html"})
+    public ResponseEntity<String> page() {
+        return ResponseEntity.ok().header("Content-Type", "text/html;charset=UTF-8").header("Cache-Control", "no-cache, no-store").body(page);
+    }
+
+    private final String page = versioned();
+
+    static String versioned() {
+        try {
+            String html = read("static/index.html"), hash = hash(read("static/app.js") + "\n" + read("static/app.css"));
+            return html.replace("href=\"app.css\"", "href=\"app.css?v=" + hash + "\"").replace("src=\"app.js\"", "src=\"app.js?v=" + hash + "\"");
+        } catch (IOException e) {
+            throw new IllegalStateException("the console's files are missing from the program", e);
+        }
+    }
+
+    private static String read(String resource) throws IOException {
+        try (var in = Console.class.getClassLoader().getResourceAsStream(resource)) {
+            if (in == null) throw new IOException(resource);
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    static String hash(String text) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(d, 0, 6);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** version is null when msgforge runs from its sources. title is null unless MSGFORGE_TITLE gives one. */
     @GetMapping("/api/console")
     public Map<String, Object> console() {
