@@ -664,9 +664,31 @@ public class Connections {
         return ENV.matcher(written).replaceAll(r -> Matcher.quoteReplacement(c.vars().getOrDefault(r.group(1), r.group())));
     }
 
-    /** A destination used with the given connection, filled in: its vars, then the environment. */
+    /**
+     * A destination used with the given connection, filled in: its vars, then the environment. A ${name} that is
+     * neither one of its vars nor a variable that may be read is reported, on a connection that has vars, as a var
+     * it lacks, with the ones it has: that is what it nearly always is (a preset written for an environment that
+     * names a queue the picked one does not). On a connection without vars it is refused as a variable, as before.
+     */
     public String resolve(String id, String written) {
-        return resolve(expand(id, written));
+        String expanded = expand(id, written);
+        Matcher m = ENV.matcher(expanded);
+        while (m.find()) {
+            String name = m.group(1);
+            if (name.startsWith("MSGFORGE_") || envAllow.stream().anyMatch(p -> p.matcher(name).matches())) continue;
+            String title;
+            Map<String, String> vars;
+            synchronized (this) {
+                int at = indexOf(id);
+                if (at < 0) break;
+                title = shown(connections.get(at).name());
+                vars = connections.get(at).vars() == null ? Map.of() : connections.get(at).vars();
+            }
+            if (vars.isEmpty()) break;   // a connection without vars: it is a variable from the environment, refused as such below
+            throw new IllegalArgumentException(title + " has no var named " + name + "; its vars are " + String.join(", ", vars.keySet())
+                    + ". Add " + name + " to its vars in the configuration file, or use another queue. (A variable from the environment needs a name that starts with MSGFORGE_.)");
+        }
+        return resolve(expanded);
     }
 
     private View view(Connection c) {

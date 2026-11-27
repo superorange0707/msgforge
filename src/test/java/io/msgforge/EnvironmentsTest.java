@@ -55,7 +55,9 @@ class EnvironmentsTest {
         assertEquals("${Reject}", store.expand(uat, "${Reject}"), "a name the connection does not have stays as written");
         assertEquals("${Input}", store.expand("gone", "${Input}"));
         String refused = assertThrows(IllegalArgumentException.class, () -> store.resolve(uat, "${Reject}")).getMessage();
-        assertTrue(refused.contains("Reject may not be used"), refused);
+        assertTrue(refused.startsWith("UAT has no var named Reject; its vars are Input."), refused);
+        assertFalse(refused.contains("MSGFORGE_ENV_ALLOW"), refused);
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> store.resolve(uat, "${PATH}")).getMessage().startsWith("UAT has no var named PATH"));
 
         // shown: a var written plainly is shown, one taken from a variable that is not listed is shown as that variable
         Connections.View view = store.get(sit);
