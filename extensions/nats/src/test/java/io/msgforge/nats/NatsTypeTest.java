@@ -152,4 +152,12 @@ class NatsTypeTest {
         assertEquals(2, errors.size(), "closing is not an error");
         verify(nc).close();
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new io.nats.client.AuthenticationException("Authorization Violation")));
+        assertTrue(io.msgforge.Refusals.refused(new java.io.IOException("Unable to connect to NATS servers: [nats://127.0.0.1:4222]", new java.io.IOException("Authorization Violation"))));
+        org.junit.jupiter.api.Assertions.assertFalse(io.msgforge.Refusals.refused(new java.io.IOException("Unable to connect to NATS servers: [nats://127.0.0.1:4222]")));
+    }
 }

@@ -838,7 +838,7 @@ function renderRejects() {
     b.onclick = () => { state.monitor = other.id; remember(); renderRejects(); };
     head.append(b);
   } else head.append(el('h2', '', monitorName(m)));
-  const state_ = el('span', 'state plain ' + (m.state === 'up' ? 'up' : m.state === 'down' ? 'down' : ''), { up: 'Watching', down: 'Down', stopped: 'Stopped' }[m.state] || 'Starting');
+  const state_ = el('span', 'state plain ' + (m.state === 'up' ? 'up' : m.state === 'down' || m.error ? 'down' : ''), { up: 'Watching', down: 'Down', stopped: 'Stopped' }[m.state] || 'Starting');
   const onoff = el('button', 'ghost', m.state === 'stopped' ? 'Start' : 'Stop');
   onoff.onclick = () => m.state === 'stopped' ? monitorAct(m, '/start', 'POST') : monitorAct(m, '', 'DELETE');
   head.append(el('span', 'sp'), el('span', 'hint', pretty(w.connection + ' / ' + w.destination)), state_, onoff);
@@ -1221,7 +1221,7 @@ function renderMonitorTable() {
     saved.onclick = () => monitorAct(m, '/saved', m.saved ? 'DELETE' : 'PUT');
     onoff.onclick = () => m.state === 'stopped' ? monitorAct(m, '/start', 'POST') : monitorAct(m, '', 'DELETE');
     acts.append(saved, onoff);
-    const state_ = el('span', 'state plain ' + (m.state === 'up' ? 'up' : m.state === 'down' ? 'down' : ''), { up: 'Watching', down: 'Down', stopped: 'Stopped' }[m.state] || 'Starting');
+    const state_ = el('span', 'state plain ' + (m.state === 'up' ? 'up' : m.state === 'down' || m.error ? 'down' : ''), { up: 'Watching', down: 'Down', stopped: 'Stopped' }[m.state] || 'Starting');
     if (m.error) state_.title = m.error;
     const queue = el('td'); queue.append(el('code', '', showQ(m.connectionId, m.watch.destination))); if (m.name) queue.append(' ' + m.name);
     return [queue, conn(m.connectionId)?.title || pretty(m.watch.connection), cell('', el('code', '', m.watch.tables.map(t => t.name).join(' · ') || '–')), cell('', state_), acts];

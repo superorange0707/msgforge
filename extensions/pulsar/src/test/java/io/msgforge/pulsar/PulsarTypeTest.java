@@ -153,4 +153,12 @@ class PulsarTypeTest {
         assertThrows(PulsarClientException.class, failing::check);
         failing.close();
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new org.apache.pulsar.client.api.PulsarClientException.AuthenticationException("bad token")));
+        assertTrue(io.msgforge.Refusals.refused(new org.apache.pulsar.client.api.PulsarClientException.AuthorizationException("no right to the topic")));
+        org.junit.jupiter.api.Assertions.assertFalse(io.msgforge.Refusals.refused(new org.apache.pulsar.client.api.PulsarClientException.TimeoutException("no answer")));
+    }
 }

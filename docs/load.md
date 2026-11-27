@@ -192,6 +192,23 @@ Each arrival in its list says which run it belonged to: a monitor shares the que
 
 **A monitor that cannot listen** does not keep msgforge from starting. Saved monitors start after the console is up, one after the other on a thread of their own, and one whose broker does not answer (or whose connection is missing, or whose variable is not set) is listed as down with the reason. It tries again after 5, 10, 20, 40 and then every 60 seconds until it is up or stopped. The same happens when receiving breaks later: the monitor goes down, keeps what it counted, and comes back by itself. An entry that only an edit can mend (a bucket that is not a regular expression, no destination) is listed as down with what is wrong and is not retried. A monitor started by hand that cannot listen is refused with the reason and not created.
 
+**A monitor whose credentials are refused stops.** Trying a wrong password again changes nothing, and enough failed logins lock the account. So when the broker refuses the credentials, or the right to the destination, the monitor does not book another attempt: it is listed as stopped, with "The credentials were refused", the broker's reason, and "It will not try again until it is started." It stays in `msgforge.json` if it was saved. Mend the connection, then start it again (Start in its row, `POST /api/monitors/{id}/start`); a restart of msgforge also tries once. This holds when it starts and when it is refused later, while listening. Every other failure keeps the waits above.
+
+What counts as a refusal, by the client's exception type where it has one and by its reason otherwise:
+
+| Transport | Recognised by |
+|---|---|
+| IBM MQ, JMS | `JMSSecurityException`; reason 2035 `MQRC_NOT_AUTHORIZED` |
+| AMQP 1.0 | `JMSSecurityException` (a failed SASL login); `amqp:unauthorized-access` |
+| RabbitMQ | `AuthenticationFailureException`; `ACCESS_REFUSED`, reply code 403 |
+| Kafka | `AuthenticationException` and `AuthorizationException` with their subclasses (`SaslAuthenticationException`, `TopicAuthorizationException`, …) |
+| MQTT | `MqttSecurityException`; "bad user name or password", "not authorized" |
+| NATS | `AuthenticationException`; "Authorization Violation" |
+| Pulsar | `PulsarClientException.AuthenticationException` and `.AuthorizationException` |
+| SQS | the error codes `AccessDenied`, `InvalidClientTokenId`, `SignatureDoesNotMatch`, `UnrecognizedClientException` |
+
+A plugin of your own is covered when its client throws one of these or its message carries one of these reasons. A connection that merely drops during login (RabbitMQ's "possibly caused by authentication failure") is not taken for a refusal and is tried again. A run is not affected: it opens its connections once and fails with the reason.
+
 `msgforge run` and `msgforge list` start no monitors: they have no console to show them, and a pipeline should not take messages off a queue that somebody is watching. With `--url` the run happens on the server, beside its monitors.
 
 **Sharing a destination.** Receiving takes messages off a queue, so two consumers on one queue would each get some of the messages. msgforge therefore opens one subscription per connection and destination, however many listen, and hands every arrival to each of them. A monitor on the reject queue goes on counting everything while a run expects its invalid messages there; the run matches the same arrivals; and neither is refused. The subscription closes when its last listener has gone: a run that ends leaves a monitor's subscription open, and a monitor that is stopped does not cut off a run.

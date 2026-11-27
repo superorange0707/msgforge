@@ -205,4 +205,15 @@ class SqsTypeTest {
         assertThrows(QueueDoesNotExistException.class, () -> SqsType.subscription(other, "missing", a -> got.add(a.body()), errors::add, 1));
         assertTrue(other.closed.get());
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        for (String code : java.util.List.of("AccessDenied", "InvalidClientTokenId")) {
+            assertTrue(io.msgforge.Refusals.refused(software.amazon.awssdk.services.sqs.model.SqsException.builder().message("refused").statusCode(403)
+                    .awsErrorDetails(software.amazon.awssdk.awscore.exception.AwsErrorDetails.builder().errorCode(code).errorMessage("refused").build()).build()), code);
+        }
+        org.junit.jupiter.api.Assertions.assertFalse(io.msgforge.Refusals.refused(software.amazon.awssdk.services.sqs.model.QueueDoesNotExistException.builder().message("no such queue").statusCode(400)
+                .awsErrorDetails(software.amazon.awssdk.awscore.exception.AwsErrorDetails.builder().errorCode("AWS.SimpleQueueService.NonExistentQueue").build()).build()));
+    }
 }

@@ -460,7 +460,8 @@ public class Connections {
             try {
                 return work.call();
             } catch (Throwable e) {
-                throw new IllegalStateException(describe(e));
+                // The original, with the values in it, is not passed along; what kind of failure it was is.
+                throw Refusals.refused(e) ? new Refusals.Refused(describe(e)) : new IllegalStateException(describe(e));
             } finally {
                 thread.setContextClassLoader(before);
             }

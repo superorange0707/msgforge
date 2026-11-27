@@ -259,4 +259,12 @@ class KafkaTypeTest {
         subscription.close();
         assertTrue(broken.closed());
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new org.apache.kafka.common.errors.SaslAuthenticationException("Invalid username or password")));
+        assertTrue(io.msgforge.Refusals.refused(new java.util.concurrent.ExecutionException(new org.apache.kafka.common.errors.TopicAuthorizationException("orders"))));
+        assertFalse(io.msgforge.Refusals.refused(new org.apache.kafka.common.errors.TimeoutException("Topic orders not present in metadata after 5000 ms.")));
+    }
 }

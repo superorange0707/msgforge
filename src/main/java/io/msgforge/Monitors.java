@@ -40,6 +40,7 @@ public class Monitors {
     static final int MAX = 10, MAX_NAME = 80;
     /** How long a monitor that is down waits before each new attempt; the last value repeats. */
     static final long[] RETRY_SECONDS = {5, 10, 20, 40, 60};
+    static final String REFUSED = "It will not try again until it is started.";
 
     /** name is optional and is what the console lists the monitor under. save keeps it in the configuration file. */
     public record Request(String name, String connection, String destination, List<Observer.Bucket> buckets, Boolean save) {
@@ -53,8 +54,9 @@ public class Monitors {
     public record Saved(String id, String name, String connection, String destination, List<Observer.Bucket> buckets) {}
 
     /**
-     * state is "starting" (not tried yet), "up", "down" or "stopped" (a saved one that was stopped by hand). A monitor that is down has the reason in error and, unless
-     * the reason is something only an edit can mend, the time of its next attempt in retryAt.
+     * state is "starting" (not tried yet), "up", "down" or "stopped" (a saved one that was stopped by hand, or any one that
+     * stopped itself because the broker refused its credentials: that one has an error). A monitor that is down has the
+     * reason in error and, unless the reason is something only an edit can mend, the time of its next attempt in retryAt.
      */
     public record View(String id, String name, String connectionId, Instant startedAt, String state, String error, Instant retryAt,
                        boolean saved, Observer.View watch) {}
@@ -241,23 +243,40 @@ public class Monitors {
         try {
             connect(m);
         } catch (RuntimeException e) {
-            broke(m, "Cannot receive: " + Runs.describe(e));
+            broke(m, "Cannot receive: " + Runs.describe(e), Refusals.refused(e));
         }
     }
 
-    /** Receiving ended, or never began. What was counted stays, and the next attempt is booked. */
     private void broke(Monitor m, String error) {
+        broke(m, error, Refusals.refused(error));
+    }
+
+    /**
+     * Receiving ended, or never began. What was counted stays, and the next attempt is booked: unless the broker
+     * refused the credentials. Trying those again changes nothing and, repeated, locks the account, so the monitor
+     * stops, saying so, and stays listed until someone who has mended the connection starts it again.
+     */
+    private void broke(Monitor m, String error, boolean refused) {
         TransportType.Subscription s;
         synchronized (m) {
             if (m.stopped) return;
             m.breaks++;
             s = m.subscription;
             m.subscription = null;
-            m.state = "down";
             m.error = error;
+            if (refused) {
+                m.stopped = true;
+                m.state = "stopped";
+                m.retryAt = null;
+                m.error = "The credentials were refused. " + error + (error.matches(".*[.!?]$") ? "" : ".") + " " + REFUSED;
+            } else {
+                m.state = "down";
+            }
             long seconds = RETRY_SECONDS[Math.min(m.attempts++, RETRY_SECONDS.length - 1)];
-            m.retryAt = Instant.now().plusMillis(seconds * retryUnitMillis);
-            if (!scheduler.isShutdown()) scheduler.schedule(() -> attempt(m), seconds * retryUnitMillis, TimeUnit.MILLISECONDS);
+            if (!refused) {
+                m.retryAt = Instant.now().plusMillis(seconds * retryUnitMillis);
+                if (!scheduler.isShutdown()) scheduler.schedule(() -> attempt(m), seconds * retryUnitMillis, TimeUnit.MILLISECONDS);
+            }
         }
         if (s == null) return;
         if (scheduler.isShutdown()) close(s);

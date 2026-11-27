@@ -212,4 +212,12 @@ class RabbitMqTypeTest {
         assertThrows(java.io.IOException.class, () -> RabbitMqType.subscription(other, "missing", body -> { }, e -> { }));
         verify(other).close(5_000);
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new com.rabbitmq.client.AuthenticationFailureException("ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN.")));
+        org.junit.jupiter.api.Assertions.assertFalse(io.msgforge.Refusals.refused(new com.rabbitmq.client.PossibleAuthenticationFailureException(new java.io.IOException("connection reset"))), "a connection lost during the handshake may be anything");
+        org.junit.jupiter.api.Assertions.assertFalse(io.msgforge.Refusals.refused(new java.net.ConnectException("Connection refused")));
+    }
 }

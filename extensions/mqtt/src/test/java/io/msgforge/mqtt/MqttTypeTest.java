@@ -176,4 +176,14 @@ class MqttTypeTest {
         three.close();
         assertThrows(Exception.class, () -> type.open(Map.of("uri", uri)), "and nothing listens there now");
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new org.eclipse.paho.client.mqttv3.MqttSecurityException(org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_FAILED_AUTHENTICATION)));
+        assertTrue(io.msgforge.Refusals.refused(new org.eclipse.paho.client.mqttv3.MqttSecurityException(org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_NOT_AUTHORIZED)));
+        assertTrue(io.msgforge.Refusals.refused(new org.eclipse.paho.mqttv5.common.MqttSecurityException(134)));
+        assertTrue(io.msgforge.Refusals.refused(new IllegalStateException(new org.eclipse.paho.mqttv5.common.MqttException(135).getMessage())), "by its text: " + new org.eclipse.paho.mqttv5.common.MqttException(135).getMessage());
+        assertFalse(io.msgforge.Refusals.refused(new org.eclipse.paho.client.mqttv3.MqttException(org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_SERVER_CONNECT_ERROR)));
+    }
 }

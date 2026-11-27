@@ -1097,6 +1097,87 @@ class LoadTest {
     }
 
     @Test
+    void aMonitorWhoseCredentialsAreRefusedStopsInsteadOfTryingAgain(@TempDir Path dir) throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Exception> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        List<Consumer<Exception>> breakers = new java.util.concurrent.CopyOnWriteArrayList<>();
+        TransportType broker = new TransportType() {
+            public String id() { return "broker"; }
+            public String label() { return "Broker"; }
+            public List<Field> fields() { return List.of(new Field("password", "Password", "", false, true)); }
+            public Sender open(Map<String, String> settings) { return (destination, body, headers) -> { }; }
+            public boolean canReceive() { return true; }
+            public Subscription receive(Map<String, String> settings, String destination, Consumer<Arrival> onArrival, Consumer<Exception> onError) throws Exception {
+                attempts.incrementAndGet();
+                if (failure.get() != null) throw failure.get();
+                breakers.add(onError);
+                return () -> { };
+            }
+        };
+        Path file = dir.resolve("msgforge.json");
+        Files.writeString(file, """
+                {"connections":[{"id":"b","name":"Broker","type":"broker","settings":{"password":"s3cret"},"destinations":[]}],
+                 "monitors":[{"id":"rejects","connection":"b","destination":"ORDERS.REJECTED"}]}""");
+        ConfigStore config = new ConfigStore(file.toString(), new ObjectMapper());
+        Monitors monitors = new Monitors(new Connections(config, List.of(broker)), config);
+        monitors.retryUnitMillis = 5;
+
+        // By its type: what a JMS client throws for a wrong password, wrapped the way clients wrap. One attempt, and no more.
+        failure.set(new IllegalStateException("could not connect", new jakarta.jms.JMSSecurityException("user app with s3cret is not known")));
+        monitors.startSaved();
+        Monitors.View refused = monitor(monitors, "rejects", "stopped");
+        assertEquals("The credentials were refused. Cannot receive: could not connect (user app with *** is not known). It will not try again until it is started.", refused.error());
+        assertNull(refused.retryAt());
+        assertTrue(refused.saved(), "it stays in the file: the next start of msgforge tries once more");
+        Thread.sleep(200);   // forty retry units
+        assertEquals(1, attempts.get(), "a wrong password is not tried again");
+
+        // Started again with the password still wrong, it stops again; by the reason in the text this time.
+        failure.set(new java.io.IOException("ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN"));
+        assertEquals("stopped", monitors.restart("rejects").state());
+        assertTrue(monitors.list().get(0).error().startsWith("The credentials were refused. Cannot receive: ACCESS_REFUSED"), monitors.list().get(0).error());
+        Thread.sleep(100);
+        assertEquals(2, attempts.get());
+
+        // Any other failure keeps trying, as before, and comes up when the broker does.
+        failure.set(new java.net.ConnectException("Connection refused"));
+        assertEquals("down", monitors.restart("rejects").state());
+        assertTrue(monitors.list().get(0).retryAt() != null && !monitors.list().get(0).error().contains("credentials"), monitors.list().get(0).toString());
+        for (int i = 0; i < 250 && attempts.get() < 5; i++) Thread.sleep(20);
+        assertTrue(attempts.get() >= 5, "still trying: " + attempts.get());
+        failure.set(null);
+        monitor(monitors, "rejects", "up");
+
+        // Refused while it was listening (the password was changed, the right to the queue taken away): it stops as well.
+        int before = attempts.get();
+        breakers.get(breakers.size() - 1).accept(new IllegalStateException("MQRC_NOT_AUTHORIZED"));
+        Monitors.View later = monitor(monitors, "rejects", "stopped");
+        assertTrue(later.error().startsWith("The credentials were refused. Receiving failed: ") && later.error().endsWith(Monitors.REFUSED), later.error());
+        Thread.sleep(100);
+        assertEquals(before, attempts.get());
+        // stopping it by hand clears the error, like any stop
+        monitors.stop("rejects");
+        assertNull(monitors.list().get(0).error());
+
+        // What the clients say, where there is only text or a code to go by, and what is not a refusal.
+        for (String text : List.of("JMSWMQ2013: The security authentication was not valid", "MQJE001: Completion Code '2', Reason '2035'.",
+                "channel error; protocol method: #method<channel.close>(reply-code=403, reply-text=ACCESS_REFUSED - access to queue refused)",
+                "Authorization Violation", "Authentication failed: Invalid username or password", "Bad user name or password (4)", "Not authorized to connect (5)",
+                "CONNACK with reason code NOT_AUTHORIZED", "User: arn:aws:iam::1:user/x is not authorized to perform: sqs:ReceiveMessage (Service: Sqs, Status Code: 403)",
+                "The security token included in the request is invalid. InvalidClientTokenId", "Open failed: amqp:unauthorized-access")) {
+            assertTrue(Refusals.refused(text), text);
+            assertTrue(Refusals.refused(new RuntimeException("wrapped", new java.io.IOException(text))), text);
+        }
+        for (String text : List.of("Connection refused", "connection refused (login ***)", "no route to host", "Environment variable MSGFORGE_PASSWORD is not set",
+                "Queue ORDERS.IN does not exist", "MQJE001: Completion Code '2', Reason '2059'.", "timed out after 2035 ms", "reply-code=404, reply-text=NOT_FOUND")) {
+            assertFalse(Refusals.refused(text), text);
+        }
+        assertFalse(Refusals.refused((String) null) || Refusals.refused((Throwable) null));
+        assertTrue(Refusals.refused(new com.ibm.mq.MQException(2, 2035, this)));
+        assertFalse(Refusals.refused(new com.ibm.mq.MQException(2, 2059, this)));
+    }
+
+    @Test
     void aThemeIsOneStyleSheetAndNothingElseIsEverServedForIt(@TempDir Path dir) throws Exception {
         Path css = Files.writeString(dir.resolve("team.css"), ":root { --accent: #00aeef; }");
         Console themed = new Console(css.toString(), "  Orders bench  ");

@@ -161,4 +161,12 @@ class AmqpTypeTest {
         assertThrows(Exception.class, in::check);
         in.close();
     }
+
+    @Test
+    void aRefusalOfCredentialsIsToldFromOtherFailures() {
+        // what this client throws: a monitor stops on the first, and goes on trying after the second
+        assertTrue(io.msgforge.Refusals.refused(new org.apache.qpid.jms.provider.exceptions.ProviderConnectionSecurityException("Client failed to authenticate using SASL: PLAIN").toJMSException()));
+        assertTrue(io.msgforge.Refusals.refused(new jakarta.jms.JMSException("Open failed [condition = amqp:unauthorized-access]")));
+        assertFalse(io.msgforge.Refusals.refused(new jakarta.jms.JMSException("Connection refused")));
+    }
 }
