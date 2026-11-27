@@ -44,15 +44,18 @@ The scenarios are easiest to make in the console against a test environment (see
 
 ### Your image
 
-Build msgforge's own image from the release you use (`docker build -t registry.example.internal/msgforge:0.2.0 .` in a checkout of that tag) and push it to your registry once per version. Your image adds your files on top:
+Build msgforge's own image from the release you use (`docker build -t registry.example.internal/msgforge:0.3.0 .` in a checkout of that tag) and push it to your registry once per version. Your image adds your files on top:
 
 ```dockerfile
-FROM registry.example.internal/msgforge:0.2.0
+FROM registry.example.internal/msgforge:0.3.0
 # Owned by root, so msgforge can use these packs but not change them: changes come through Git.
 COPY packs /app/team-packs
 # Copied to /data/msgforge.json on a volume that does not have one yet.
 COPY msgforge.json /app/msgforge.json
 ENV MSGFORGE_PACKS=/data/packs,/app/team-packs
+# Optional: your colours over the console's own (README, "A look of your own"), and its name in the top left.
+COPY theme.css /app/theme.css
+ENV MSGFORGE_THEME=/app/theme.css MSGFORGE_TITLE="Orders bench"
 ```
 
 New packs made in the console go to `/data/packs`, the first folder; your packs from Git are shown as read-only. Plugin jars go to `/app/plugins` (`COPY plugins/*.jar /app/plugins/`). Upgrading msgforge is then a change to the `FROM` line.
@@ -178,7 +181,7 @@ What has been checked: the image and the settings this Deployment relies on, wit
 
 ## Testers
 
-**The shared console.** Open the instance's address and sign in through the proxy. Pick a template or a scenario and send; the run shows each check. The team's packs are read-only there: to change a template, work locally (below) and send the change to the configuration repository. Connections and scenarios are shared by everyone who uses that instance.
+**The shared console.** Open the instance's address and sign in through the proxy. The environment is in the top right; pick a template and Send, or a preset under Load and Start; the run shows each check. The team's packs are read-only there: to change a template, work locally (below) and send the change to the configuration repository. Connections and scenarios are shared by everyone who uses that instance.
 
 **Your own machine.** With Docker, clone the configuration repository and start your team's image with a local volume:
 
@@ -187,6 +190,6 @@ docker run --rm -p 127.0.0.1:8585:8585 -v msgforge-data:/data --env-file env/tes
   -e MSGFORGE_KAFKA_PASSWORD registry.example.internal/team/msgforge:2026.11.1
 ```
 
-or, to edit packs in the repository directly, the release zip: `MSGFORGE_PACKS=$PWD/packs MSGFORGE_CONFIG=$PWD/msgforge.json msgforge-0.2.0/bin/msgforge`. Changes made in the console are then files in your checkout, to commit like any other. Keep passwords as `${MSGFORGE_…}` references in the console too: a password typed in is saved into `msgforge.json`.
+or, to edit packs in the repository directly, the release zip: `MSGFORGE_PACKS=$PWD/packs MSGFORGE_CONFIG=$PWD/msgforge.json msgforge-0.3.0/bin/msgforge`. Changes made in the console are then files in your checkout, to commit like any other. Keep passwords as `${MSGFORGE_…}` references in the console too: a password typed in is saved into `msgforge.json`.
 
 **Pipelines.** `msgforge run <scenario> --report msgforge.xml` with the same configuration, or `--url` against the shared instance; [ci.md](ci.md) has the details and examples.

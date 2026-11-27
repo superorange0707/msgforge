@@ -4,7 +4,7 @@ A message simulator: write a template, press Send, and msgforge publishes as man
 
 It ships with IBM MQ and HTTP connection types, a dry-run type that needs no broker, and plugins for Kafka, RabbitMQ, MQTT, AMQP 1.0, Amazon SQS and NATS. It can also listen where the messages should end up and tell you whether they got there, and run as a load test: a rate that ramps up, several senders, a share of messages made invalid on purpose, a reject queue watched and sorted by reason, and a report at the end. Formats, brokers, generators and whole test scenarios are added next to the core, not by changing it.
 
-![The msgforge console: a template with its preview, the send form, and two verified runs](docs/console.png)
+![The msgforge console in Send: a template and the choices of its pack above the message it renders, the queue and the Send button on the right, recent sends below](docs/console.png)
 
 ## Run it
 
@@ -20,7 +20,7 @@ Connections, scenarios and packs are then kept in `$(brew --prefix)/var/msgforge
 From a release: unzip `msgforge-<version>.zip` and start it. The zip holds the application, the bundled packs and the plugins.
 
 ```bash
-msgforge-0.2.0/bin/msgforge
+msgforge-0.3.0/bin/msgforge
 ```
 
 On Windows it is `bin\msgforge.bat`. It needs Java 17 or newer, found on the `PATH` or through `JAVA_HOME`. `packs/`, `plugins/` and `msgforge.json` are the ones in the unzipped folder; the scripts go there first, and so should you if you run `java -jar msgforge.jar` yourself.
@@ -40,28 +40,36 @@ To try it with a real broker, [examples/quickstart](examples/quickstart/) starts
 
 The console has no login. It listens on 127.0.0.1 only, and it answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]`, so a web page open in the same browser cannot reach it under another name, post to it from another site, or show it in a frame. Keep it on your own machine, or see [Running in a container](#running-in-a-container).
 
-## Everything is configured in the console
+## The console
 
-| What | Where |
+The top bar has four modes, the environment the messages go to, and a gear.
+
+| | |
 |---|---|
-| Connections (broker address, channel, login) | the sliders button next to Connection |
-| Destinations (queues) per connection | the same dialog, or the + next to Destination |
-| Packs and their shared fields | the sliders button on a pack in the sidebar, or New pack |
-| Templates | + on a pack to create, the editor to change, the bin to delete |
-| Templates from files | the upload arrow on a pack, or drop message files anywhere on the page; what should differ per message is marked for you |
-| Scenarios (saved runs) | the bookmark next to Send, or + on Scenarios in the sidebar |
-| Ramp-up, duration, senders, seed | Load in the send form, or the scenario dialog |
-| Invalid messages | Invalid in the send form, or the slider in the scenario dialog |
-| A message exactly as typed | Raw in the editor's toolbar |
-| Watching a reject or dead-letter queue | Watch in the scenario dialog, or + on Monitors in the sidebar |
-| A run's numbers, chart and reports | click the run's name |
-| Saved reports | the archive button at the bottom of the sidebar |
+| **Send** | one message. Pick a template; every choice or range among its pack's fields is a control above the message, and the message shown is what goes out. Queue, Send. Raw makes the message editable and sends it as typed; Check arrival says where it should turn up. Recent sends are listed with what became of them. |
+| **Load** | a run to a plan: rate, messages or duration, ramp-up, senders, seed, a share of invalid messages, and whether rejects are checked. Presets (saved scenarios) are at the top: one click fills the form, Save as preset keeps what you changed. The run in progress is under the message: sent, rate, send time, and where its messages ended up. More holds what is needed less often: where valid messages arrive, timeout and match, headers, a mix of templates, further queues to send to, queues to watch. |
+| **Rejects** | the queues msgforge watches, a reject queue say: how many arrived since the last reset, by each value they are grouped by, and for each arrival the run that sent it and whether that was a message made invalid on purpose. |
+| **Reports** | the runs msgforge still has and the reports it saved, with their HTML, JSON and CSV. A click opens a run in full. |
+| **Environment** (top right) | a connection: where Send and Load send. The dot is green when its broker answered the last check. The choice is kept per browser. |
+| **Settings** (the gear) | everything that is configuration: environments (connections and their queues), templates and packs, presets, reject queues. |
 
-Connections, scenarios and saved monitors are kept in `msgforge.json`, packs in the `packs/` folder. Both are plain files you can copy to another machine.
+A new template is easiest made from a real message: "Paste a message…" in the template menu shows beside it what msgforge would turn into placeholders, and saves the result.
+
+Connections, presets (scenarios) and saved reject queues (monitors) are kept in `msgforge.json`, packs in the `packs/` folder. Both are plain files you can copy to another machine.
+
+### A look of your own
+
+`MSGFORGE_THEME=/path/to/theme.css` lays one style sheet over the console's own. The console's colours, the code panel and the corner radius are CSS variables at the top of [`app.css`](src/main/resources/static/app.css); a theme sets them again, for the dark palette under `:root` and for the light one under `:root[data-theme="light"]`, and may add rules of its own:
+
+```css
+:root, :root[data-theme="light"] { --accent: #0b6e4f; --accent-line: #0b6e4f; --grad: #0b6e4f; --glow: none; }
+```
+
+The file is read at each request, so an edit shows at the next reload. Only a `.css` file up to 512 KB is served, as a style sheet and nothing else; a file that is missing gives no theme, not a broken page. `MSGFORGE_TITLE` replaces the name in the top left and in the browser tab (up to 40 characters).
 
 ## Templates
 
-A template is any text file with `{{placeholders}}`. The Insert menu in the editor lists them.
+A template is any text file with `{{placeholders}}`. The editor is under Settings › Templates, and its Insert menu lists them.
 
 | Placeholder | Produces |
 |---|---|
@@ -92,9 +100,9 @@ Import a real message and msgforge marks what has to differ from one message to 
 <Label>3f2b8c1e-9a4d-4e7b-8c21-5d6f7a8b9c0d</Label>                <Label>{{ShipmentId}}</Label>
 ```
 
-Three ways in: the upload arrow on a pack, files dropped on the page, or a message copied from anywhere and pasted on the page (outside a text field; it asks for a file name). A message pasted into an empty editor is recognised the same way.
+The way in is "Paste a message…", in the template menu and under Settings › Templates: paste on the left, and the template msgforge makes of it is on the right, with what it found counted below. Placeholders that are one of the pack's fields are green, generators blue. Nothing is written until you give it a name and save. The wand in the editor does the same for a template that is already there, as an unsaved edit.
 
-A file is imported as it is, and a pasted message is not written anywhere until you save; either way the placeholders are an unsaved edit in the editor, yours to save or discard. The wand next to Insert does the same for whatever is in the editor, and one thing more: it also uses the pack's fields (the last row of the table), and says which.
+Both use the pack's fields as well (the last row of the table): a whole value that is one of a field's choices becomes that field.
 
 | In the sample | Becomes |
 |---|---|
@@ -103,13 +111,13 @@ A file is imported as it is, and a pasted message is not written anywhere until 
 | a date and time | `{{now}}`, or `{{now <pattern>}}` in the sample's own shape: with or without offset and fractions, `yyyy-MM-dd HH:mm:ss`, `yyyyMMddHHmmss` |
 | an IBAN `{{iban}}` could have made (GB, DE, NL, valid check digits) | `{{iban GB}}` |
 | a value one of your plugin's generators says is its own | that generator's placeholder |
-| with the wand only: a whole value that is one of a pack field's `{{pick …}}` choices | `{{field}}` |
+| a whole value that is one of a pack field's `{{pick …}}` choices | `{{field}}` |
 
 It is cautious on purpose, because in a routing test the values that decide the route must stay as the sample has them.
 
 - Numbers are left alone: an amount, a quantity, a counter. The one exception is fourteen digits that read as a date and time of this century (`yyyyMMddHHmmss`).
 - A date without a time is left alone. It is a version, a birthday or part of a name far more often than it is today.
-- A currency, a country or a type code stays as it is on import, so a sample that stands for one route still does. The wand replaces such a value when the pack has a field that lists it, and only where it is the whole of an attribute value, of the text between two tags, of a JSON string or of a delimited cell (a quoted cell counts as one, commas and all). Text in a comment or a CDATA section is not looked at for this.
+- A currency, a country or a type code becomes the pack's field only when the pack has a field that lists it; with no such field it stays as it is. A template made from a sample that stood for one route then stands for all of them: fix the value with its control above the message, or in a preset, where one route is meant. The replacement happens only where it is the whole of an attribute value, of the text between two tags, of a JSON string or of a delimited cell (a quoted cell counts as one, commas and all). Text in a comment or a CDATA section is not looked at for this.
 - A value directly after a backslash, as in a Windows path, is left alone, because a backslash before `{{` means a literal `{{`.
 - Everything else is left byte for byte, so a rendered message is the sample with other values in the same places: well-formed XML stays well-formed, and JSON renders as JSON. Two limits to that: the template itself need not be valid JSON, since a time with a space in it is written `{{now "yyyy-MM-dd HH:mm:ss"}}`; and what a pack field or a plugin's generator produces has to fit where the value stood (a field choice with `&` in it does not fit in XML).
 
@@ -131,7 +139,7 @@ packs/
       reading.csv
 ```
 
-Fields are named placeholders the pack's templates share, for example `carrier` = `{{pick "Northwind Freight" "Blue Harbor"}}`. The Overrides box fixes a field for one run, for example `carrier=Blue Harbor`.
+Fields are named placeholders the pack's templates share, for example `carrier` = `{{pick "Northwind Freight" "Blue Harbor"}}`. In the console a field that is a `{{pick …}}` is a dropdown above the message (Any, or one of its choices), and one that is a `{{decimal MIN MAX N}}` or `{{int MIN MAX}}` is a pair of numbers: what you choose there is an override for the run, the same thing as `"vars": {"carrier": "Blue Harbor"}` in a request. An override is usually a plain value; one that holds a placeholder (`{{decimal 5 50 2}}`) is rendered for each message, which is how the pair of numbers narrows a range.
 
 Packs are read from disk on every request, so a folder you drop in shows up without a restart. To mount packs kept somewhere else, list the folders; new packs are created in the first one:
 
@@ -216,6 +224,8 @@ The image runs as a non-root user and keeps everything the console changes on th
 | `MSGFORGE_ENV_ALLOW` | environment variables a connection may name besides `MSGFORGE_*`, for example `MQ_*,KAFKA_*` | none | |
 | `MSGFORGE_REPORTS` | a folder: every run that ends is saved there as HTML, JSON and CSV | none | `/data/reports` |
 | `MSGFORGE_REPORTS_KEEP` | how many runs that folder keeps; older ones are removed | `50` | |
+| `MSGFORGE_THEME` | a `.css` file laid over the console's style sheet | none | `/app/theme.css` |
+| `MSGFORGE_TITLE` | what the console calls itself | `msgforge` | |
 | `MSGFORGE_ALLOWED_HOSTS` | host names the console answers to besides `localhost`, comma-separated; `*` for any | none | |
 
 With the port published as above the console is at http://localhost:8585, for you only. Reached under any other name, for example `msgforge.internal` behind a proxy, it answers 403 until that name is in `MSGFORGE_ALLOWED_HOSTS`. The proxy has to pass the original `Host` header on: a write is accepted only when the browser's `Origin` matches it. `*` turns the host check off, which is only safe where nothing untrusted can reach the port.
@@ -228,16 +238,16 @@ The image has been tried by hand (Docker 28 on arm64), most recently with the qu
 
 ## Sending to several brokers at once
 
-Press Target in the send form to add another connection and destination. All connections are opened before the first message, so one that is down fails the run up front and names itself.
+In Load, under More, "Also send to" adds further queues, on this environment or another. All connections are opened before the first message, so one that is down fails the run up front and names itself.
 
 | Mode | What each message does |
 |---|---|
-| Spread | goes to the next target in turn |
-| Copy to all | goes to every target |
+| (default) | goes to the next queue in turn |
+| Copy to all | goes to every queue |
 
 ## Headers
 
-The Headers box adds message properties, written like Overrides: `JMSCorrelationID={{ref}}, region=EU`. They are rendered per message and share the body's bindings, so a header can repeat an id the body generated with `{{ref=id}}`.
+Headers (in Send, and under More in Load) adds message properties, written `name=value` with commas between: `JMSCorrelationID={{ref}}, region=EU`. They are rendered per message and share the body's bindings, so a header can repeat an id the body generated with `{{ref=id}}`.
 
 | Connection type | What a header becomes |
 |---|---|
@@ -251,13 +261,13 @@ The Headers box adds message properties, written like Overrides: `JMSCorrelation
 | NATS | a NATS header |
 | Apache Pulsar | a message property; `key` sets the message key |
 
-## Scenarios
+## Scenarios (presets)
 
-A scenario is a saved run you can start again with one click. It can mix several templates by weight: weights 7 and 3 send exactly 70% and 30%, evenly interleaved. Each template can have its own overrides, which is how you produce messages that should take different paths downstream.
+A scenario is a saved run you can start again with one click; the console calls it a preset and lists them at the top of Load and under Settings › Presets. It can mix several templates by weight: weights 7 and 3 send exactly 70% and 30%, evenly interleaved. Each template can have its own overrides, which is how you produce messages that should take different paths downstream.
 
-Its numbers (messages, rate, weights, timeout) are checked when it is saved. Its packs and connections are checked when it runs, so a scenario can be prepared before the pack or broker it needs exists. In the dialog, a connection or destination that has since been removed shows as `… (missing)` and is kept until you pick another.
+Its numbers (messages, rate, weights, timeout) are checked when it is saved. Its packs and connections are checked when it runs, so a scenario can be prepared before the pack or broker it needs exists.
 
-A scenario refers to template files, so save a template before saving a scenario from the send form.
+A preset names a connection, and the console sends to the environment chosen in the top right: when a preset is picked there, the connection of its first target is replaced by that environment wherever the preset names it, and Save as preset saves it that way. From the command line and the API a scenario runs on the connections it names.
 
 ## Runs
 
@@ -283,7 +293,7 @@ The case it is built for is a router that reads one queue and forwards each mess
 
 | | |
 |---|---|
-| Turn it on | Verify in the send form, or the arrow under a template in a scenario |
+| Turn it on | Check arrival in Send; in Load, "Valid arrive on" under More, or the queue beside each template of a mix |
 | Verdict | `PASS` when every message arrived where expected, `FAIL` when the run completed and some did not. A run that failed or was cancelled has no verdict. |
 | Timeout | how long to wait after the last send, 10 seconds unless set (1 to 600). The run ends sooner once everything has arrived somewhere. |
 | Size | a run with expectations sends at most 20,000 messages |
@@ -382,7 +392,8 @@ Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE
 Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.
-Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `GET /api/types` (each with `canReceive`).
+Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `POST /api/connections/{id}/check` (asks a saved connection's broker whether it is there, and remembers the answer), `GET /api/connections/status` (the last answers), `GET /api/types` (each with `canReceive`). A connection also has a `title` (its name with any `${MSGFORGE_NAME}` filled in) and `queues` (for each destination written with a variable, the name it stands for); both are for showing.
+The console itself: `GET /api/console` (`version`, `title`, whether a `theme` is set), `GET /theme.css`.
 Packs: `GET|POST /api/packs` (`POST` takes `id`, `name` and `fields`), `PUT|DELETE /api/packs/{id}`, `GET|PUT|DELETE /api/packs/{id}/templates/{name}`, `POST /api/preview`, `GET /api/generators`, `POST /api/recognise?pack={id}` (a sample as `text/plain` in; the template and the list of replacements with line, value, placeholder and, where a pack field was used, `field` out; nothing is saved; add `&fields=true` to have the pack's field choices replaced as well). A template `PUT` replaces; with the header `If-None-Match: *` it only creates, and answers 409 if a template of that name exists (in any letter case, where the file system ignores case).
 
 Errors are `{"error": "…"}`: 400 for input msgforge can explain, 404 for an id that does not exist (a `PUT` never creates), 403 for a request from another host or site, 500 for anything unexpected, with the details in the server log.

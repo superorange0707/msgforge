@@ -8,13 +8,13 @@ Everything here is optional. A run or scenario that uses none of it behaves as i
 
 | Setting | Console | API (`load.…`) | Meaning |
 |---|---|---|---|
-| Messages | Messages | `count` | how many to send. `0` means no count: the run then needs a duration, or has to be allowed to run until stopped. |
-| Rate | Per second | `rate` | the target rate. `0` sends as fast as possible. |
-| Ramp-up | Load › Ramp-up (s) | `rampUpSeconds` | the rate rises in a straight line from nothing to the target over this long. Needs a rate. |
-| Duration | Load › Duration (s) | `durationSeconds` | stop sending after this long. With a count as well, whichever comes first ends the run. |
-| Senders | Load › Senders | `senders` | how many send at once, each over a connection of its own. Default 1. `0` lets the run decide. |
-| Until stopped | Load › Until stopped | `unlimited: true` | a run with neither a count nor a duration. It has to say so; it ends when it is cancelled. |
-| Seed | Load › Seed | `seed` | see [Seeds](#seeds) |
+| Messages | Load: Messages | `count` | how many to send. `0` means no count: the run then needs a duration, or has to be allowed to run until stopped. |
+| Rate | Load: Per second | `rate` | the target rate. `0` sends as fast as possible. |
+| Ramp-up | Load: Ramp-up (s) | `rampUpSeconds` | the rate rises in a straight line from nothing to the target over this long. Needs a rate. |
+| Duration | Load: Duration (s) | `durationSeconds` | stop sending after this long. With a count as well, whichever comes first ends the run. |
+| Senders | Load: Senders (empty is 0, the run decides) | `senders` | how many send at once, each over a connection of its own. Default 1. `0` lets the run decide. |
+| Until stopped | Load › More: Until stopped | `unlimited: true` | a run with neither a count nor a duration. It has to say so; it ends when it is cancelled. |
+| Seed | Load: Seed | `seed` | see [Seeds](#seeds) |
 
 Limits: a count up to 1,000,000,000, a duration up to 7 days, a ramp-up up to 24 hours, up to 64 senders.
 
@@ -58,7 +58,7 @@ Connections are opened and checked before the first message, as before, so a bro
 
 `GET /api/runs/{id}` adds the `series` (points of `t`, `seconds`, `target`, `sent`, `failed`, `invalid`; `sent / seconds` is the rate) and `watches` with their tables.
 
-In the console, click a run's name: the numbers, a chart of target rate, sent and failed a second, the checks, the errors and the watched destinations, updated every second. A run started with the Load block open shows this view at once. `http://localhost:8585/#run=<id>` opens it directly.
+In the console the run started in Load is under the message while it goes and after: sent, rate, send time p95, failed, invalid, the rate over time against its target, and a bar of where its messages ended up (delivered, rejected as expected, valid but rejected, accepted although invalid, misrouted, missing). A click on its name, or on any run under Reports, opens it in full: all the numbers, the chart, the checks, the errors, the watched destinations, the messages still kept, and the report downloads, updated every second. `http://localhost:8585/#run=<id>` opens it directly.
 
 ## Invalid messages
 
@@ -89,7 +89,7 @@ Invalid messages are counted apart (`invalid`, and `faults` by kind), and the Se
 
 An invalid message is expected to be rejected. In a run that verifies:
 
-- With `invalid.expect` (console: Invalid › Invalid arrive on, shown while Verify is on), invalid messages are expected on that destination.
+- With `invalid.expect` (console: Check rejects in Load, and the queue it then asks for), invalid messages are expected on that destination.
 - Without it they are expected nowhere. The run then waits its whole timeout, because their staying away is the result.
 
 Each part that verifies gets a second check for its invalid messages (`"invalid": true`):
@@ -118,7 +118,7 @@ If the system under test does neither, a rejected message cannot be told from an
 
 ## Seeds
 
-Every run has a seed, shown with the run and in its reports. Given one (`"seed": 42`, Load › Seed, `--seed`), a run makes the same bodies and the same faults for the same message numbers, whatever the number of senders: `{{int}}`, `{{decimal}}`, `{{pick}}`, `{{digits}}`, `{{alnum}}`, pack fields built from them, which messages are faulted, with which kind, and where.
+Every run has a seed, shown with the run and in its reports. Given one (`"seed": 42`, Seed in Load, `--seed`), a run makes the same bodies and the same faults for the same message numbers, whatever the number of senders: `{{int}}`, `{{decimal}}`, `{{pick}}`, `{{digits}}`, `{{alnum}}`, pack fields built from them, which messages are faulted, with which kind, and where.
 
 Not repeated, on purpose: `{{uuid}}` and `{{id}}`. An id is what a message is recognised by when it arrives. If a seed repeated it, a message the last run left on a queue would pass for an arrival of this run, and an id drawn from a seed could be guessed. They come from the system's secure random source in every run, seeded or not. So two runs with one seed differ in their ids and in nothing else that is random; a message cut off inside its id is cut at the same place.
 
@@ -126,7 +126,7 @@ Also not repeatable: `{{now}}` and `{{today}}`, generators from plugins, which s
 
 ## Raw
 
-Raw in the editor's toolbar (API: `"raw": true`) sends the text and the headers exactly as typed. No placeholder is filled in, in the body or in a header, and Overrides do not apply. Over the API a raw message needs no pack and no template:
+Raw in Send (API: `"raw": true`) makes the message editable, starting from the sample shown, and sends the text and the headers exactly as typed. No placeholder is filled in, in the body or in a header, and the field controls do not apply. Over the API a raw message needs no pack and no template:
 
 ```bash
 curl -X POST localhost:8585/api/runs -H 'content-type: application/json' \
@@ -172,7 +172,9 @@ What arrives is somebody else's data, and a bucket expression is typed by a user
 
 ### Monitors
 
-A monitor is the same thing outside a run: an always-on view of a reject queue, say. Monitors › + in the sidebar, a connection that can receive, a destination, buckets, and a name if you like. It counts until it is stopped; Reset clears its counts. Up to 10 at a time.
+A monitor is the same thing outside a run: an always-on view of a reject queue, say. The console calls them reject queues: the Rejects page shows them, and Settings › Reject queues (or the empty Rejects page) adds one: an environment that can receive, a queue, what to group by, and a name if you like. It counts until it is stopped; "reset" under the count starts the count again, while the total beside it runs on. Up to 10 at a time.
+
+Each arrival in its list says which run it belonged to: a monitor shares the queue's subscription with the runs that listen there, and when one of them recognises an arrival as a message it sent, the list shows the run and what it made of it: "invalid, expected" for a reject that was meant to be one, "was valid" for a valid message that should not have been rejected, "not ours" for everything no run sent. (API: `run` and `outcome` on each entry of `recent`; `outcome` is `valid-expected`, `invalid-expected`, `valid-unexpected` or `invalid-unexpected`.)
 
 **Saved monitors.** A monitor can be kept in `msgforge.json`, in a `monitors` section beside `connections` and `scenarios`, and then starts with the console:
 
@@ -183,7 +185,7 @@ A monitor is the same thing outside a run: an always-on view of a reject queue, 
 ]
 ```
 
-`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, Saved in the new-monitor dialog or on a monitor's view writes it there, and pressing it again takes it out (a monitor that is listening goes on listening). Stopping is a different thing: a saved monitor that is stopped stays in the file and in the list, shown as stopped with what it counted, starts again with the next start of msgforge, and can be started again before that (Start in its view, or the button next to it in the sidebar). A monitor that is not saved is gone when it is stopped, and a stopped one that is taken out of the file is gone too. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
+`connection` is a connection's id; `id`, `name` and `buckets` may be left out. In the console, the Saved switch (when adding a reject queue, and in its row under Settings › Reject queues) writes it there, and switching it off takes it out (a monitor that is listening goes on listening). Stopping is a different thing: a saved monitor that is stopped stays in the file and in the list, shown as stopped with what it counted, starts again with the next start of msgforge, and can be started again before that (Start, where Stop was). A monitor that is not saved is gone when it is stopped, and a stopped one that is taken out of the file is gone too. A file without a `monitors` section starts none. Counts are kept in memory and start from nothing after a restart.
 
 **A monitor that cannot listen** does not keep msgforge from starting. Saved monitors start after the console is up, one after the other on a thread of their own, and one whose broker does not answer (or whose connection is missing, or whose variable is not set) is listed as down with the reason. It tries again after 5, 10, 20, 40 and then every 60 seconds until it is up or stopped. The same happens when receiving breaks later: the monitor goes down, keeps what it counted, and comes back by itself. An entry that only an edit can mend (a bucket that is not a regular expression, no destination) is listed as down with what is wrong and is not retried. A monitor started by hand that cannot listen is refused with the reason and not created.
 
@@ -226,7 +228,7 @@ A run can be downloaded from its view in the console, or from the API, at any ti
 
 A report holds names, counts, errors and bucket values, never a message body. Text that came from outside is escaped in the HTML, and in the CSV a cell that a spreadsheet would take for a formula gets a `'` in front. Reports are served as downloads, not as pages of the console.
 
-With `MSGFORGE_REPORTS=/some/folder` every run that ends is saved there in all four formats, as `msgforge-<UTC start>-<run id>-<label>.<format>`. The folder keeps the newest `MSGFORGE_REPORTS_KEEP` runs (50 unless set) and removes older ones; it only ever removes files with names of that form. A run is shown as ended only after its reports have been written, so a script that waits for a run to end can read them at once. The archive button at the bottom of the sidebar lists them (`GET /api/reports`, `GET /api/reports/{file}`).
+With `MSGFORGE_REPORTS=/some/folder` every run that ends is saved there in all four formats, as `msgforge-<UTC start>-<run id>-<label>.<format>`. The folder keeps the newest `MSGFORGE_REPORTS_KEEP` runs (50 unless set) and removes older ones; it only ever removes files with names of that form. A run is shown as ended only after its reports have been written, so a script that waits for a run to end can read them at once. The Reports page lists them under the runs msgforge still has in memory (`GET /api/reports`, `GET /api/reports/{file}`).
 
 **One folder per msgforge.** The retention removes the oldest files with names of that form whoever wrote them, so two instances that share a folder would delete each other's reports. Give each its own. (Telling the files apart would take an identity that survives a restart, which a container does not have; a per-process memory of what was written would let the folder grow with every restart.) The folder is written by msgforge with the rights it runs with; reports are not cleaned of anything a label or a destination name says, so treat the folder like the console.
 
@@ -344,7 +346,7 @@ Not tested:
 - Sharing a subscription on a real consuming queue (IBM MQ, SQS, a RabbitMQ queue). The sharing happens above the connection types and is tested with a fake that behaves like one; Dry run, where it was checked by hand, hands a copy to every listener anyway and would not show a split.
 - Throughput. No number here is a benchmark; Dry run on one machine says nothing about a broker.
 - Runs longer than a few minutes, and very high rates. The statistics are built to stay small, and that is tested by feeding them 2,000 seconds of data, not by running for a week.
-- The console in browsers other than Chrome, and with a screen reader: controls have labels, toggles say whether they are pressed, the chart has a text description, and everything can be reached by keyboard, but no assistive technology was run.
+- The console in browsers other than Chrome, and with a screen reader: controls have labels, switches and toggles say their state, menus work with the arrow keys and Escape, the charts have a text description, and everything can be reached by keyboard, but no assistive technology was run. Below about 860 px wide the console stacks into one column; that layout was not reviewed.
 
 What each connection type gives a run:
 
