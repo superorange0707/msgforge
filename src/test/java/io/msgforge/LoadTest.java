@@ -98,7 +98,7 @@ class LoadTest {
     }
 
     private Connections store(Path dir, TransportType... types) {
-        Connections store = new Connections(new ConfigStore(dir.resolve("c.json").toString(), new ObjectMapper()), List.of(types), new String[] {"HOME"});
+        Connections store = new Connections(new ConfigStore(dir.resolve("c.json").toString(), new ObjectMapper()), List.of(types), new String[] {"HOME"}, new String[] {"HOME"});
         for (TransportType t : types) {
             if (!t.id().equals("dry-run")) store.save(new Connections.Connection(null, t.label(), t.id(), Map.of(), List.of("Q")));
         }
@@ -1042,7 +1042,8 @@ class LoadTest {
         assertTrue(java.util.stream.IntStream.range(0, 20).mapToObj(i -> engine.render("{{total}}", fields, Map.of("total", "{{decimal 5 6 2}}"))).distinct().count() > 1, "rendered anew each time");
         assertThrows(IllegalArgumentException.class, () -> engine.render("{{total}}", fields, Map.of("total", "{{nope}}")));
 
-        // A name or a queue written with a variable is shown by what it stands for; what cannot be read stays as written. Settings are never filled in.
+        // A name or a queue written with a variable that may be shown (MSGFORGE_SHOW, here HOME) is shown by what it stands for;
+        // what cannot be read stays as written. Settings are never filled in.
         Sink sink = new Sink();
         Connections store = store(dir, sink, new DryRunType());
         store.save(new Connections.Connection("dry-run", "Home ${HOME}", "dry-run", Map.of("route", "A > ${HOME}"), List.of("Q.${HOME}", "PLAIN", "${PATH}", "${MSGFORGE_NOT_SET_ANYWHERE}")));

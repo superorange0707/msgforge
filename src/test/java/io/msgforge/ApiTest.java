@@ -75,6 +75,7 @@ class ApiTest {
         registry.add("msgforge.packs", () -> dir.resolve("packs") + ",packs");
         registry.add("msgforge.allowed-hosts", () -> "console.example, Other.Example");
         registry.add("msgforge.env-allow", () -> "HOME");
+        registry.add("msgforge.show", () -> "HOME");
         registry.add("msgforge.reports", () -> dir.resolve("reports").toString());
         Files.writeString(dir.resolve("team.css"), ":root { --accent: #00aeef; }");
         registry.add("msgforge.theme", () -> dir.resolve("team.css").toString());
@@ -733,6 +734,11 @@ class ApiTest {
         assertEquals("Env ${HOME}", made.get("name").asText());
         assertEquals("IN." + System.getenv("HOME"), made.get("queues").get("IN.${HOME}").asText());
         assertEquals(1, made.get("queues").size());
+        // and only a variable listed to be shown: one a connection may use is not thereby one the console gives out
+        JsonNode kept = sent(post("/api/connections"), "{\"name\":\"${MSGFORGE_CONFIG} ${JAVA_HOME}\",\"type\":\"dry-run\",\"destinations\":[\"${MSGFORGE_CONFIG}\"]}");
+        assertEquals("${MSGFORGE_CONFIG} ${JAVA_HOME}", kept.get("title").asText());
+        assertEquals(0, kept.get("queues").size());
+        mvc.perform(delete("/api/connections/" + kept.get("id").asText())).andExpect(status().isOk());
         mvc.perform(delete("/api/connections/" + made.get("id").asText())).andExpect(status().isOk());
 
         // a run with an override that is an expression: each message gets a value from the narrower range

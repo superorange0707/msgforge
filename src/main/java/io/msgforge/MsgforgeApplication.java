@@ -43,6 +43,7 @@ public class MsgforgeApplication {
               MSGFORGE_PLUGINS        folder of plugin jars, plugins                      [--msgforge.plugins]
               MSGFORGE_ALLOWED_HOSTS  host names it answers to besides localhost          [--msgforge.allowed-hosts]
               MSGFORGE_ENV_ALLOW      variables a connection may name besides MSGFORGE_*  [--msgforge.env-allow]
+              MSGFORGE_SHOW           variables the console may show the value of, MSGFORGE_ENV [--msgforge.show]
               MSGFORGE_REPORTS        folder every finished run's report is saved in, none [--msgforge.reports]
               MSGFORGE_REPORTS_KEEP   how many runs that folder keeps, 50                 [--msgforge.reports-keep]
               MSGFORGE_THEME          a .css file laid over the console's own style       [--msgforge.theme]

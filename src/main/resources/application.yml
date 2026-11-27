@@ -8,6 +8,7 @@ msgforge:
   plugins: plugins       # jars here add connection types and generators                   (env: MSGFORGE_PLUGINS)
   allowed-hosts: ""      # extra host names the console answers to, or * for any; localhost always (env: MSGFORGE_ALLOWED_HOSTS)
   env-allow: ""          # environment variables a connection may name besides MSGFORGE_*, e.g. MQ_*,KAFKA_*  (env: MSGFORGE_ENV_ALLOW)
+  show: "MSGFORGE_ENV"   # variables whose value the console may show in a name or a queue          (env: MSGFORGE_SHOW)
   reports: ""            # a folder: every run that ends is saved there as HTML, JSON and CSV; empty saves none  (env: MSGFORGE_REPORTS)
   reports-keep: 50       # runs kept in that folder; the oldest are removed                 (env: MSGFORGE_REPORTS_KEEP)
   theme: ""              # a .css file laid over the console's own style sheet                (env: MSGFORGE_THEME)

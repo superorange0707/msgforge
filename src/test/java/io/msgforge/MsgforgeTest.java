@@ -228,6 +228,40 @@ class MsgforgeTest {
         assertEquals("Environment variable MSGFORGE_NOT_SET_ANYWHERE is not set",
                 assertThrows(IllegalArgumentException.class, () -> strict.resolve(Map.of("k", "${MSGFORGE_NOT_SET_ANYWHERE}"))).getMessage());
 
+        // What a view shows of a variable. By default the environment's name and nothing else: a connection or a queue
+        // named after the variable that holds a password comes back as written.
+        Map<String, String> environment = Map.of("MSGFORGE_ENV", "SIT", "MSGFORGE_MQ_PASSWORD", "dummy-mq-pw", "MSGFORGE_REGION", "north");
+        Connections kit = new Connections(new ConfigStore(dir.resolve("kit.json").toString(), new ObjectMapper()), List.of(type));
+        kit.env = environment::get;
+        Connections.View sit = kit.save(new Connections.Connection("mq", "${MSGFORGE_ENV}", "fake", Map.of("host", "h", "password", "${MSGFORGE_MQ_PASSWORD}"),
+                List.of("ROUTER.${MSGFORGE_ENV}.IN", "${MSGFORGE_MQ_PASSWORD}", "Q.${MSGFORGE_REGION}", "${MSGFORGE_ENV}.${MSGFORGE_MQ_PASSWORD}")));
+        assertEquals("SIT", sit.title());
+        assertEquals(Map.of("ROUTER.${MSGFORGE_ENV}.IN", "ROUTER.SIT.IN"), sit.queues());
+        Connections.View leak = kit.save(new Connections.Connection(null, "x ${MSGFORGE_MQ_PASSWORD}", "fake", Map.of("host", "${MSGFORGE_MQ_PASSWORD}"), List.of("${MSGFORGE_MQ_PASSWORD}")));
+        assertEquals("x ${MSGFORGE_MQ_PASSWORD}", leak.title());
+        assertTrue(leak.queues().isEmpty());
+        assertFalse(kit.list().toString().contains("dummy-mq-pw") || kit.list().toString().contains("north"), kit.list().toString());
+        // Listed in MSGFORGE_SHOW, a variable is shown, unless some connection keeps a secret in it: a slip in that list
+        // does not hand out a password. A setting its type does not declare counts as a secret.
+        Connections wide = new Connections(new ConfigStore(dir.resolve("wide.json").toString(), new ObjectMapper()), List.of(type), new String[0],
+                new String[] {" MSGFORGE_REGION ", "MSGFORGE_MQ_PASSWORD", "MSGFORGE_ENV"});
+        wide.env = environment::get;
+        String a = wide.save(new Connections.Connection(null, "${MSGFORGE_REGION} ${MSGFORGE_MQ_PASSWORD}", "fake", Map.of("host", "${MSGFORGE_REGION}"), List.of("Q.${MSGFORGE_REGION}"))).id();
+        assertEquals("north dummy-mq-pw", wide.get(a).title(), "nobody uses it as a secret, and whoever started msgforge listed it");
+        wide.save(new Connections.Connection(null, "B", "fake", Map.of("host", "h", "password", "p-${MSGFORGE_MQ_PASSWORD}"), List.of()));
+        assertEquals("${MSGFORGE_REGION} ${MSGFORGE_MQ_PASSWORD}", wide.get(a).title());
+        assertEquals(Map.of("Q.${MSGFORGE_REGION}", "Q.north"), wide.get(a).queues());
+        // in a file written by hand: a key the type does not know, and a type that is not installed
+        Files.writeString(dir.resolve("hand.json"), """
+                {"connections":[{"id":"a","name":"${MSGFORGE_ENV} ${MSGFORGE_REGION}","type":"fake","settings":{"host":"h","tokne":"${MSGFORGE_ENV}"}},
+                                {"id":"b","name":"${MSGFORGE_REGION}","type":"gone","settings":{"host":"${MSGFORGE_REGION}"},"destinations":["${MSGFORGE_REGION}"]}]}""");
+        Connections hand = new Connections(new ConfigStore(dir.resolve("hand.json").toString(), new ObjectMapper()), List.of(type), new String[0],
+                new String[] {"MSGFORGE_REGION", "MSGFORGE_ENV"});
+        hand.env = environment::get;
+        assertEquals("${MSGFORGE_ENV} ${MSGFORGE_REGION}", hand.get("a").title());
+        assertEquals("${MSGFORGE_REGION}", hand.get("b").title());
+        assertTrue(hand.get("b").queues().isEmpty());
+
         // A type that quotes its settings in an error, the ways the real ones did: a piece of a comma-separated value,
         // with the spaces taken out, in upper case, and in the cause. Neither the environment value nor the password gets out.
         String path = System.getenv("PATH"), firstDir = path.split(":")[0];

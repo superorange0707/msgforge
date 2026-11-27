@@ -39,15 +39,18 @@ public class Connections {
 
     /** What the API returns: secret settings are blanked and listed in secretsSet instead. */
     /**
-     * title is the name with any ${MSGFORGE_NAME} in it filled in (one file can then call its connection after the
-     * environment it runs in), and queues gives, for each destination written with a variable, the name it stands
+     * title is the name with the variables in it that may be shown filled in (see shown(): one file can then call its
+     * connection after the environment it runs in), and queues gives, for each destination written with such a variable, the name it stands
      * for. Both are for showing; requests use what is written. Settings are never filled in for a view.
      */
     public record View(String id, String name, String type, String typeLabel, String summary,
                        Map<String, String> settings, List<String> secretsSet, List<String> destinations,
                        String title, Map<String, String> queues) {}
 
-    /** How the last check of a saved connection went. */
+    /**
+     * How a saved connection last did: at its last check, or when a run last opened it. Nothing checks by itself: a
+     * console that asked on every visit would, with a wrong password saved, lock the account out by being looked at.
+     */
     public record Status(boolean ok, String error, java.time.Instant at) {}
 
     private final Map<String, Status> statuses = new java.util.concurrent.ConcurrentHashMap<>();
@@ -69,6 +72,11 @@ public class Connections {
         return status;
     }
 
+    /** A run opened the connection, or could not (error says why): that is its state as last seen, like a check. */
+    public synchronized void noted(String id, String error) {
+        if (indexOf(id) >= 0) statuses.put(id, new Status(error == null, error, java.time.Instant.now()));
+    }
+
     /** The last check of each connection that has had one since msgforge started. */
     public synchronized Map<String, Status> statuses() {
         Map<String, Status> known = new LinkedHashMap<>();
@@ -76,9 +84,17 @@ public class Connections {
         return known;
     }
 
-    /** As written when a variable in it may not be read or is not set: a view never fails over a name. */
+    /**
+     * A name as the console may show it: with its variables filled in only when every one of them is listed in
+     * MSGFORGE_SHOW (by default MSGFORGE_ENV alone) and none is named in a secret setting of any connection. What a
+     * view returns, anyone who can open the console can read, and anyone who can open the console can also name a
+     * connection or a destination after any variable: so a value is shown because whoever started msgforge said it
+     * may be, never because of where it was written. Anything else comes back as written; a view never fails over a name.
+     */
     private String shown(String written) {
         if (!written.contains("${")) return written;
+        Matcher m = ENV.matcher(written);
+        while (m.find()) if (!show.contains(m.group(1)) || secretNames().contains(m.group(1))) return written;
         try {
             return resolve(written);
         } catch (RuntimeException e) {
@@ -86,8 +102,29 @@ public class Connections {
         }
     }
 
+    /**
+     * The variables some connection keeps a secret in. A setting counts as secret unless its type declares it and
+     * declares it not to be: a key the type does not know, or a type that is not installed, may hold anything.
+     */
+    private java.util.Set<String> secretNames() {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        for (Connection c : connections) {
+            TransportType type = types.get(c.type());
+            java.util.Set<String> open = type == null ? java.util.Set.of()
+                    : type.fields().stream().filter(f -> !f.secret()).map(TransportType.Field::key).collect(Collectors.toSet());
+            c.settings().forEach((key, value) -> {
+                if (open.contains(key)) return;
+                Matcher m = ENV.matcher(value);
+                while (m.find()) names.add(m.group(1));
+            });
+        }
+        return names;
+    }
+
     private final ConfigStore store;
     private final List<Pattern> envAllow;
+    private final java.util.Set<String> show;
+    java.util.function.UnaryOperator<String> env = System::getenv;   // the environment; a test gives its own
     private final Map<String, TransportType> types = new LinkedHashMap<>();
     private final List<Connection> connections = new ArrayList<>();
 
@@ -95,9 +132,15 @@ public class Connections {
         this(store, types, new String[0]);
     }
 
+    public Connections(ConfigStore store, List<TransportType> types, String[] envAllow) {
+        this(store, types, envAllow, new String[] {"MSGFORGE_ENV"});
+    }
+
     @Autowired
-    public Connections(ConfigStore store, List<TransportType> types, @Value("${msgforge.env-allow:}") String[] envAllow) {
+    public Connections(ConfigStore store, List<TransportType> types, @Value("${msgforge.env-allow:}") String[] envAllow,
+                       @Value("${msgforge.show:MSGFORGE_ENV}") String[] show) {
         this.store = store;
+        this.show = Arrays.stream(show).map(String::trim).filter(n -> !n.isEmpty()).collect(Collectors.toUnmodifiableSet());
         // MQ_* becomes a pattern in which * is the only special character
         this.envAllow = Arrays.stream(envAllow).map(String::trim).filter(n -> !n.isEmpty())
                 .map(n -> Pattern.compile(Arrays.stream(n.split("\\*", -1)).map(Pattern::quote).collect(Collectors.joining(".*")))).toList();
@@ -438,14 +481,14 @@ public class Connections {
      */
     // ponytail: catches a value whole, trimmed, in its comma- or space-separated pieces, and in any letter case.
     // A type that encodes a value (base64, URL-escaping) before quoting it is not covered; a type must not quote settings.
-    private static Guard guard(Connection c, TransportType type, Map<String, String> resolved) {
+    private Guard guard(Connection c, TransportType type, Map<String, String> resolved) {
         Map<String, String> shown = new LinkedHashMap<>();
         c.settings().forEach((key, stored) -> {
             String value = resolved.get(key);
             if (!value.equals(stored)) {
                 hide(shown, value, stored);
                 Matcher m = ENV.matcher(stored);
-                while (m.find()) hide(shown, System.getenv(m.group(1)), m.group());
+                while (m.find()) hide(shown, env.apply(m.group(1)), m.group());
             }
         });
         for (TransportType.Field f : type.fields()) {
@@ -526,9 +569,9 @@ public class Connections {
                         + "Give it a name that starts with MSGFORGE_, or start msgforge with MSGFORGE_ENV_ALLOW=" + name
                         + " (a comma-separated list of names; * stands for any characters).");
             }
-            String env = System.getenv(name);
-            if (env == null) throw new IllegalArgumentException("Environment variable " + name + " is not set");
-            return Matcher.quoteReplacement(env);
+            String found = env.apply(name);
+            if (found == null) throw new IllegalArgumentException("Environment variable " + name + " is not set");
+            return Matcher.quoteReplacement(found);
         });
     }
 

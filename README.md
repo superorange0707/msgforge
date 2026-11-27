@@ -162,6 +162,8 @@ Password  ${MSGFORGE_MQ_PASSWORD}
 
 Only variables whose name starts with `MSGFORGE_` can be used this way. A connection can send what it is given to any address its author chooses, so a variable a connection may name is a variable anyone with access to the console can read; the rest of the environment is kept out of reach. To use names you already have, list them when starting msgforge: `MSGFORGE_ENV_ALLOW=MQ_*,KAFKA_PASSWORD` (comma-separated, `*` stands for any characters). A reference to any other name fails with a message that says so, and the variable is not read.
 
+The console never shows what a variable holds, with one exception made for names. A connection called `${MSGFORGE_ENV}` is shown as `SIT` where that is the variable's value, and a queue `ORDERS.${MSGFORGE_ENV}.IN` as `ORDERS.SIT.IN`. That is done only for the variables listed in `MSGFORGE_SHOW` (comma-separated names; `MSGFORGE_ENV` alone unless you say otherwise), and never for one that any connection uses in a password or another secret setting, listed or not. Every other `${…}` is shown as it is written. List only variables that hold a name.
+
 A password typed in directly is stored in `msgforge.json` (owner-readable only, and git-ignored here).
 
 What msgforge does so that neither comes back out:
@@ -224,6 +226,7 @@ The image runs as a non-root user and keeps everything the console changes on th
 | `MSGFORGE_ENV_ALLOW` | environment variables a connection may name besides `MSGFORGE_*`, for example `MQ_*,KAFKA_*` | none | |
 | `MSGFORGE_REPORTS` | a folder: every run that ends is saved there as HTML, JSON and CSV | none | `/data/reports` |
 | `MSGFORGE_REPORTS_KEEP` | how many runs that folder keeps; older ones are removed | `50` | |
+| `MSGFORGE_SHOW` | variables whose value the console may show in the name of a connection or a queue | `MSGFORGE_ENV` | `MSGFORGE_ENV,MSGFORGE_REGION` |
 | `MSGFORGE_THEME` | a `.css` file laid over the console's style sheet | none | `/app/theme.css` |
 | `MSGFORGE_TITLE` | what the console calls itself | `msgforge` | |
 | `MSGFORGE_ALLOWED_HOSTS` | host names the console answers to besides `localhost`, comma-separated; `*` for any | none | |
@@ -392,7 +395,7 @@ Monitors: `GET|POST /api/monitors`, `POST /api/monitors/{id}/reset`, `PUT|DELETE
 Reports: `GET /api/reports` (the saved ones), `GET /api/reports/{file}`. Metrics: `GET /metrics`.
 Messages: `GET /api/messages` (the latest 50, without bodies), `GET /api/messages/{runId}/{n}/{target}` (one message with its body and headers).
 Scenarios: `GET|POST /api/scenarios`, `PUT|DELETE /api/scenarios/{id}`, `POST /api/scenarios/{id}/run`.
-Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `POST /api/connections/{id}/check` (asks a saved connection's broker whether it is there, and remembers the answer), `GET /api/connections/status` (the last answers), `GET /api/types` (each with `canReceive`). A connection also has a `title` (its name with any `${MSGFORGE_NAME}` filled in) and `queues` (for each destination written with a variable, the name it stands for); both are for showing.
+Connections: `GET|POST /api/connections`, `PUT|DELETE /api/connections/{id}`, `POST /api/connections/test`, `POST /api/connections/{id}/check` (asks a saved connection's broker whether it is there, and remembers the answer), `GET /api/connections/status` (how each last did: at its last check, or when a run last opened it), `GET /api/types` (each with `canReceive`). A connection also has a `title` (its name with the variables listed in `MSGFORGE_SHOW` filled in) and `queues` (for each destination written with a variable, the name it stands for); both are for showing.
 The console itself: `GET /api/console` (`version`, `title`, whether a `theme` is set), `GET /theme.css`.
 Packs: `GET|POST /api/packs` (`POST` takes `id`, `name` and `fields`), `PUT|DELETE /api/packs/{id}`, `GET|PUT|DELETE /api/packs/{id}/templates/{name}`, `POST /api/preview`, `GET /api/generators`, `POST /api/recognise?pack={id}` (a sample as `text/plain` in; the template and the list of replacements with line, value, placeholder and, where a pack field was used, `field` out; nothing is saved; add `&fields=true` to have the pack's field choices replaced as well). A template `PUT` replaces; with the header `If-None-Match: *` it only creates, and answers 409 if a template of that name exists (in any letter case, where the file system ignores case).
 

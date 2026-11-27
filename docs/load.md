@@ -258,7 +258,7 @@ scrape_configs:
 
 ## Names from the environment
 
-A destination in a run, a scenario (targets, expectations, watches, the invalid destination) or a monitor may contain `${MSGFORGE_NAME}`, under the same rule as a connection's settings (`MSGFORGE_*`, or a name in `MSGFORGE_ENV_ALLOW`). It is filled in when the run starts, so one `msgforge.json` serves several environments. The console, the reports and the metrics show the text as written. Unlike a setting, the resolved name is handed to the broker as a destination and may come back in a broker's error message, so a variable used for a destination should hold a name and nothing secret.
+A destination in a run, a scenario (targets, expectations, watches, the invalid destination) or a monitor may contain `${MSGFORGE_NAME}`, under the same rule as a connection's settings (`MSGFORGE_*`, or a name in `MSGFORGE_ENV_ALLOW`). It is filled in when the run starts, so one `msgforge.json` serves several environments. The console, the reports and the metrics show the text as written, except that the console shows a queue by the name it stands for when every variable in it is listed in `MSGFORGE_SHOW` (see the README). Unlike a setting, the resolved name is handed to the broker as a destination and may come back in a broker's error message, so a variable used for a destination should hold a name and nothing secret.
 
 ## A scenario with everything
 
