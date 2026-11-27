@@ -45,6 +45,8 @@ public class MsgforgeApplication {
               MSGFORGE_ENV_ALLOW      variables a connection may name besides MSGFORGE_*  [--msgforge.env-allow]
               MSGFORGE_REPORTS        folder every finished run's report is saved in, none [--msgforge.reports]
               MSGFORGE_REPORTS_KEEP   how many runs that folder keeps, 50                 [--msgforge.reports-keep]
+              MSGFORGE_THEME          a .css file laid over the console's own style       [--msgforge.theme]
+              MSGFORGE_TITLE          what the console calls itself, msgforge             [--msgforge.title]
 
             The README next to this program explains each of them.
             """;

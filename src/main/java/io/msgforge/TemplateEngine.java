@@ -73,7 +73,8 @@ public class TemplateEngine {
 
     /**
      * @param fields named expressions from the pack, e.g. currency -> {{pick GBP EUR}}
-     * @param vars   values fixed for this message, e.g. overrides typed for a run
+     * @param vars   overrides typed for a run: what {{name}} is instead of the pack's field of that name. Usually a plain
+     *               value; one that holds placeholders itself ({{decimal 1 50 2}}) is rendered at each use, as a field is
      */
     public String render(String template, Map<String, String> fields, Map<String, String> vars) {
         return message(fields, vars, new AtomicLong()).render(template);
@@ -94,7 +95,7 @@ public class TemplateEngine {
      * {{today}}) and generators from plugins do not come from it and differ from run to run.
      */
     public Message message(Map<String, String> fields, Map<String, String> vars, AtomicLong seq, RandomGenerator random) {
-        return new Rendering(fields, new HashMap<>(vars), seq, random);
+        return new Rendering(fields, vars, seq, random);
     }
 
     public interface Message {
@@ -105,14 +106,14 @@ public class TemplateEngine {
     }
 
     private final class Rendering implements Message {
-        private final Map<String, String> fields, bound;
+        private final Map<String, String> fields, overrides, bound = new HashMap<>();
         private final AtomicLong seq;
         private final RandomGenerator random;   // null: the thread's own, and ids from the system
         private String firstId;
 
-        Rendering(Map<String, String> fields, Map<String, String> bound, AtomicLong seq, RandomGenerator random) {
+        Rendering(Map<String, String> fields, Map<String, String> overrides, AtomicLong seq, RandomGenerator random) {
             this.fields = fields;
-            this.bound = bound;
+            this.overrides = overrides;
             this.seq = seq;
             this.random = random;
         }
@@ -140,6 +141,8 @@ public class TemplateEngine {
                 String value;
                 if (bind != null && bound.containsKey(bind)) value = bound.get(bind);
                 else if (bound.containsKey(name)) value = bound.get(name);
+                // An override stands where the pack's field stood. "EUR" is "EUR"; "{{decimal 1 50 2}}" narrows a range for this run.
+                else if (overrides.containsKey(name)) value = overrides.get(name).contains("{{") ? render(overrides.get(name), depth + 1) : overrides.get(name);
                 else if (fields.containsKey(name)) value = render(fields.get(name), depth + 1);
                 else {
                     value = builtin(name, args(m.group(3)), seq, random);

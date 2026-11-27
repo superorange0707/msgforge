@@ -38,8 +38,53 @@ public class Connections {
     public record Connection(String id, String name, String type, Map<String, String> settings, List<String> destinations) {}
 
     /** What the API returns: secret settings are blanked and listed in secretsSet instead. */
+    /**
+     * title is the name with any ${MSGFORGE_NAME} in it filled in (one file can then call its connection after the
+     * environment it runs in), and queues gives, for each destination written with a variable, the name it stands
+     * for. Both are for showing; requests use what is written. Settings are never filled in for a view.
+     */
     public record View(String id, String name, String type, String typeLabel, String summary,
-                       Map<String, String> settings, List<String> secretsSet, List<String> destinations) {}
+                       Map<String, String> settings, List<String> secretsSet, List<String> destinations,
+                       String title, Map<String, String> queues) {}
+
+    /** How the last check of a saved connection went. */
+    public record Status(boolean ok, String error, java.time.Instant at) {}
+
+    private final Map<String, Status> statuses = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Opens the saved connection and asks the broker whether it is there. Never throws for a broker's answer: the answer is the result. */
+    public Status check(String id) {
+        Connection c;
+        synchronized (this) {
+            c = find(id);
+        }
+        Status status;
+        try (TransportType.Sender sender = open(c)) {
+            sender.check();
+            status = new Status(true, null, java.time.Instant.now());
+        } catch (Exception e) {
+            status = new Status(false, Runs.describe(e), java.time.Instant.now());
+        }
+        statuses.put(id, status);
+        return status;
+    }
+
+    /** The last check of each connection that has had one since msgforge started. */
+    public synchronized Map<String, Status> statuses() {
+        Map<String, Status> known = new LinkedHashMap<>();
+        for (Connection c : connections) if (statuses.containsKey(c.id())) known.put(c.id(), statuses.get(c.id()));
+        return known;
+    }
+
+    /** As written when a variable in it may not be read or is not set: a view never fails over a name. */
+    private String shown(String written) {
+        if (!written.contains("${")) return written;
+        try {
+            return resolve(written);
+        } catch (RuntimeException e) {
+            return written;
+        }
+    }
 
     private final ConfigStore store;
     private final List<Pattern> envAllow;
@@ -106,6 +151,7 @@ public class Connections {
     }
 
     public synchronized void delete(String id) {
+        statuses.remove(id);
         connections.remove(find(id));
         persist();
     }
@@ -202,12 +248,17 @@ public class Connections {
                     tap.opened = true;
                     try {
                         tap.subscription = receive(id, destination, arrival -> {
-                            for (Listener l : joined.listeners) {
-                                try {
-                                    l.onArrival().accept(arrival);
-                                } catch (RuntimeException ignored) {
-                                    // one listener's trouble with an arrival is not the others'
+                            DELIVERING.set(new Delivery());
+                            try {
+                                for (Listener l : joined.listeners) {
+                                    try {
+                                        l.onArrival().accept(arrival);
+                                    } catch (RuntimeException ignored) {
+                                        // one listener's trouble with an arrival is not the others'
+                                    }
                                 }
+                            } finally {
+                                DELIVERING.remove();
                             }
                         }, error -> {
                             retire(key, joined);
@@ -246,6 +297,37 @@ public class Connections {
                 }
             };
         }
+    }
+
+    /**
+     * One arrival on its way through the listeners of a shared subscription. A monitor keeps a line about it, and a run
+     * may recognise it as one of its messages, at once or a moment later; whichever comes first, the line learns
+     * which run it was. That is how a reject queue's list can say "this one was ours, and expected".
+     */
+    static final class Delivery {
+        private final List<Observer.Entry> kept = new ArrayList<>(2);
+        private String run, outcome;
+        private long message;
+
+        synchronized void keep(Observer.Entry entry) {
+            kept.add(entry);
+            if (run != null) entry.matched(run, message, outcome);
+        }
+
+        synchronized void claim(String run, long message, String outcome) {
+            if (this.run != null) return;   // the first run to recognise it has it
+            this.run = run;
+            this.message = message;
+            this.outcome = outcome;
+            for (Observer.Entry entry : kept) entry.matched(run, message, outcome);
+        }
+    }
+
+    private static final ThreadLocal<Delivery> DELIVERING = new ThreadLocal<>();
+
+    /** The arrival this thread is handing to listeners now, or null outside a shared subscription. */
+    static Delivery delivering() {
+        return DELIVERING.get();
     }
 
     /** No new listener joins this subscription; the ones it has keep it until they leave. */
@@ -453,7 +535,9 @@ public class Connections {
     private View view(Connection c) {
         TransportType type = types.get(c.type());
         // Without the type there is no telling which settings are secret, so none are shown.
-        if (type == null) return new View(c.id(), c.name(), c.type(), c.type() + " (not installed)", "", Map.of(), List.of(), c.destinations());
+        Map<String, String> queues = new LinkedHashMap<>();
+        for (String d : c.destinations()) if (!shown(d).equals(d)) queues.put(d, shown(d));
+        if (type == null) return new View(c.id(), c.name(), c.type(), c.type() + " (not installed)", "", Map.of(), List.of(), c.destinations(), shown(c.name()), queues);
         // Only what the type declares, and of that only what is not secret. A setting the type does not know
         // (a misspelt key in a hand-written file, a secret an older plugin version called something else) stays here.
         Map<String, String> shown = new LinkedHashMap<>();
@@ -464,7 +548,7 @@ public class Connections {
             if (f.secret()) secretsSet.add(f.key());
             else shown.put(f.key(), value);
         }
-        return new View(c.id(), c.name(), c.type(), type.label(), type.summary(c.settings()), shown, secretsSet, c.destinations());
+        return new View(c.id(), c.name(), c.type(), type.label(), type.summary(c.settings()), shown, secretsSet, c.destinations(), shown(c.name()), queues);
     }
 
     private Connection find(String id) {

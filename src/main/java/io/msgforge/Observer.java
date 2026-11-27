@@ -42,14 +42,20 @@ final class Observer {
 
     public record Table(String name, List<Count> values) {}
 
-    /** One arrival: when, its bucket values in the order of the tables, the number of the sent message it was recognised as (or null), its size. */
-    public record Recent(Instant at, List<String> values, Long message, int bytes) {}
+    /**
+     * One arrival: when, its bucket values in the order of the tables, the number of the sent message it was recognised
+     * as (or null), its size. run is the id of the run that recognised it and outcome what that run made of it:
+     * valid-expected, invalid-expected (a reject that was meant to be one), valid-unexpected (a valid message that
+     * should not have come here), invalid-unexpected. Both are null for an arrival no run recognised.
+     */
+    public record Recent(Instant at, List<String> values, Long message, int bytes, String run, String outcome) {}
 
     /** What the run list shows: counts only. rate is arrivals a second over the last 10 seconds. */
     public record Summary(String connection, String destination, long count, double rate, Instant lastAt) {}
 
+    /** count is since the last reset, total since the observer began. */
     public record View(String connection, String destination, long count, double rate, Instant lastAt, Instant since,
-                       List<Table> tables, List<Recent> recent, List<String> samples) {}
+                       List<Table> tables, List<Recent> recent, List<String> samples, long total) {}
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -59,7 +65,7 @@ final class Observer {
     private final Deque<Entry> recent = new ArrayDeque<>();
     private final Deque<String> samples = new ArrayDeque<>();
     private final Stats.Window window = new Stats.Window();
-    private long count, sinceNanos = System.nanoTime();
+    private long count, total, sinceNanos = System.nanoTime();
     private Instant lastAt, since = Instant.now();
 
     Observer(String connection, String destination, List<Bucket> buckets) {
@@ -108,11 +114,18 @@ final class Observer {
         private final List<String> values;
         private final int bytes;
         volatile Long message;
+        volatile String run, outcome;
 
         Entry(List<String> values, Long message, int bytes) {
             this.values = values;
             this.message = message;
             this.bytes = bytes;
+        }
+
+        void matched(String run, long message, String outcome) {
+            this.message = message;
+            this.outcome = outcome;
+            this.run = run;
         }
     }
 
@@ -219,7 +232,10 @@ final class Observer {
                 values.add(value);
             }
             Entry entry = new Entry(values, message, utf8Length(a.body()));
+            Connections.Delivery delivery = Connections.delivering();
+            if (delivery != null) delivery.keep(entry);
             count++;
+            total++;
             lastAt = entry.at;
             window.add(now, 1);
             recent.addFirst(entry);
@@ -271,6 +287,6 @@ final class Observer {
         }
         long now = System.nanoTime();
         return new View(connection, destination, count, window.rate(now, 10, now - sinceNanos), lastAt, since, out,
-                recent.stream().map(e -> new Recent(e.at, e.values, e.message, e.bytes)).toList(), withSamples ? List.copyOf(samples) : List.of());
+                recent.stream().map(e -> new Recent(e.at, e.values, e.message, e.bytes, e.run, e.outcome)).toList(), withSamples ? List.copyOf(samples) : List.of(), total);
     }
 }

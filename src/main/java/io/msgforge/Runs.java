@@ -218,11 +218,11 @@ public class Runs {
     /** An arrival that named a message nobody had sent yet, as far as the run knew: where it arrived, and what the observer kept of it. */
     private static final class Stray {
         final int watch;
-        volatile Observer.Entry kept;
-        volatile Awaited claimed;
+        final Connections.Delivery delivery;
 
-        Stray(int watch) {
+        Stray(int watch, Connections.Delivery delivery) {
             this.watch = watch;
+            this.delivery = delivery;
         }
     }
 
@@ -414,8 +414,7 @@ public class Runs {
                 Stray early = strays.remove(messageId);
                 if (early != null && a.watch < 0 && pending.get(a.token) == a) {
                     settle(a, early.watch, System.nanoTime());
-                    early.claimed = a;
-                    if (early.kept != null) early.kept.message = a.n;   // the list of arrivals learns which message it was
+                    if (early.delivery != null) early.delivery.claim(id, a.n, outcome(a, early.watch));   // the lists of arrivals learn which message it was
                 }
             }
         }
@@ -451,7 +450,7 @@ public class Runs {
             long now = System.nanoTime();
             Long message = null;
             String correlation = arrival.correlationId();
-            Stray stray = null;
+            Connections.Delivery delivery = Connections.delivering();
             synchronized (awaited) {
                 Awaited found = null;
                 for (Awaited a : pending.values()) {
@@ -460,20 +459,21 @@ public class Runs {
                 if (found == null && correlation != null && verifying) {
                     found = byId.get(correlation);
                     if (found != null && pending.get(found.token) != found) found = null;   // it has arrived already
-                    else if (found == null) strays.put(correlation, stray = new Stray(watch));
+                    else if (found == null) strays.put(correlation, new Stray(watch, delivery));
                 }
                 if (found != null) {
                     settle(found, watch, now);
                     message = found.n;
+                    // every list this arrival is on, this run's and a monitor's on the same destination, learns whose it was
+                    if (delivery != null) delivery.claim(id, found.n, outcome(found, watch));
                 }
             }
-            Observer.Entry kept = observers.get(watch).arrived(arrival, message);
-            if (stray != null) {
-                stray.kept = kept;
-                Awaited late = stray.claimed;   // its send returned between the two steps above
-                if (late != null) kept.message = late.n;
-            }
+            observers.get(watch).arrived(arrival, message);
             totals.arrivals(watches.get(watch)).increment();
+        }
+
+        private static String outcome(Awaited a, int watch) {
+            return (a.invalid ? "invalid-" : "valid-") + (watch == a.expected ? "expected" : "unexpected");
         }
 
         private static boolean carries(TransportType.Arrival arrival, String token) {
@@ -516,7 +516,9 @@ public class Runs {
                             else if (!invalid && a.watch == invalidWatch) rejected++;
                             else misrouted++;
                         }
-                        if (invalid ? sent == 0 : own < 0) continue;
+                        // No check for what was not sent or is not expected anywhere: "0 sent, 0 arrived" judges nothing. (A run whose
+                        // messages all came out invalid has no valid ones to check, and a part without an expectation none at all.)
+                        if (sent == 0 || !invalid && own < 0) continue;
                         Collections.sort(latencies);
                         int n = latencies.size();
                         String where = expected < 0 ? "nowhere" : watches.get(expected).connection() + " / " + watches.get(expected).destination();

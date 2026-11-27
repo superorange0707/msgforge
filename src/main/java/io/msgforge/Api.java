@@ -156,6 +156,18 @@ public class Api {
         connections.delete(id);
     }
 
+    /** Asks the saved connection's broker whether it is there, and remembers the answer. Always 200 for a connection that exists. */
+    @PostMapping("/connections/{id}/check")
+    public Connections.Status checkConnection(@PathVariable String id) {
+        return connections.check(id);
+    }
+
+    /** The last check of each connection, by id. A connection that was not checked since the start is not in it. */
+    @GetMapping("/connections/status")
+    public Map<String, Connections.Status> connectionStatus() {
+        return connections.statuses();
+    }
+
     /** Tries the connection as typed in the form. Always 200: a refused connection is a result, not an API error. */
     @PostMapping("/connections/test")
     public Map<String, Object> testConnection(@RequestBody Connections.Connection c) {

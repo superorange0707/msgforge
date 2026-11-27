@@ -76,6 +76,9 @@ class ApiTest {
         registry.add("msgforge.allowed-hosts", () -> "console.example, Other.Example");
         registry.add("msgforge.env-allow", () -> "HOME");
         registry.add("msgforge.reports", () -> dir.resolve("reports").toString());
+        Files.writeString(dir.resolve("team.css"), ":root { --accent: #00aeef; }");
+        registry.add("msgforge.theme", () -> dir.resolve("team.css").toString());
+        registry.add("msgforge.title", () -> "Orders bench");
         registry.add("spring.artemis.embedded.enabled", () -> "false");   // the broker on the test classpath belongs to MsgforgeTest
     }
 
@@ -698,5 +701,44 @@ class ApiTest {
         }
         mvc.perform(get("/metrics").header("Host", "evil.example")).andExpect(status().isForbidden());
         mvc.perform(get("/metrics").header("Host", "console.example")).andExpect(status().isOk());
+    }
+
+    // ---- what the console asks about itself and its connections
+
+    @Test
+    void theConsoleLearnsItsTitleItsThemeAndWhetherAConnectionAnswers() throws Exception {
+        mvc.perform(get("/api/console")).andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Orders bench")).andExpect(jsonPath("$.theme").value(true));
+        mvc.perform(get("/theme.css")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "text/css;charset=UTF-8"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff")).andExpect(header().string("X-Frame-Options", "DENY"))
+                .andExpect(content().string(":root { --accent: #00aeef; }"));
+        mvc.perform(get("/theme.css").header("Host", "evil.example")).andExpect(status().isForbidden());
+        // the page links it after its own style sheet
+        String page = mvc.perform(get("/index.html")).andReturn().getResponse().getContentAsString();
+        assertTrue(page.indexOf("href=\"app.css\"") > 0 && page.indexOf("href=\"theme.css\"") > page.indexOf("href=\"app.css\""), "theme.css after app.css");
+
+        // a connection's last check: asked for, remembered, listed by id
+        mvc.perform(post("/api/connections/dry-run/check")).andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
+        mvc.perform(post("/api/connections/gone/check")).andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.error", containsString("which is not installed")));
+        mvc.perform(get("/api/connections/status")).andExpect(status().isOk()).andExpect(jsonPath("$.dry-run.ok").value(true)).andExpect(jsonPath("$.gone.ok").value(false))
+                .andExpect(jsonPath("$.typo").doesNotExist());
+        mvc.perform(post("/api/connections/nope/check")).andExpect(status().isNotFound());
+        mvc.perform(post("/api/connections/dry-run/check").header("Origin", "http://evil.example")).andExpect(status().isForbidden());
+        String status = mvc.perform(get("/api/connections/status")).andReturn().getResponse().getContentAsString();
+        assertFalse(status.contains("S3CRET-GONE") || status.contains("R1GHT-SECRET"), status);
+
+        // names and queues with variables are shown by what they stand for; the request still uses what is written
+        JsonNode made = sent(post("/api/connections"), "{\"name\":\"Env ${HOME}\",\"type\":\"dry-run\",\"destinations\":[\"IN.${HOME}\",\"PLAIN\"]}");
+        assertEquals("Env " + System.getenv("HOME"), made.get("title").asText());
+        assertEquals("Env ${HOME}", made.get("name").asText());
+        assertEquals("IN." + System.getenv("HOME"), made.get("queues").get("IN.${HOME}").asText());
+        assertEquals(1, made.get("queues").size());
+        mvc.perform(delete("/api/connections/" + made.get("id").asText())).andExpect(status().isOk());
+
+        // a run with an override that is an expression: each message gets a value from the narrower range
+        String id = sent(post("/api/runs"), "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":3,"
+                + "\"vars\":{\"currency\":\"{{pick JPY}}\",\"customer\":\"Plain Name\"}}").get("id").asText();
+        lastRun();
+        mvc.perform(get("/api/messages/" + id + "/1/0")).andExpect(jsonPath("$.body", containsString("\"currency\": \"JPY\""))).andExpect(jsonPath("$.body", containsString("\"customer\": \"Plain Name\"")));
     }
 }

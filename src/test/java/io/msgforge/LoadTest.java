@@ -520,6 +520,23 @@ class LoadTest {
         assertEquals(rejects.tables().get(0).values(), rejects.tables().get(1).values(), "the reason is in the body and in a header");
         // the reject names the message it is about, so each one is recognised though the stand-in sent it before the send had returned
         assertTrue(rejects.recent().stream().allMatch(r -> r.message() != null), rejects.recent().toString());
+        // A monitor on the reject queue sees the same rejects, each marked as an invalid message that was expected there;
+        // what nobody sent through a run is "not ours". (The reject comes back before the send has returned, so the
+        // run recognises it a moment after it arrived: the monitor's line learns of it then.)
+        Monitors monitors = new Monitors(store);
+        Monitors.View watching = monitors.start(new Monitors.Request("dry-run", "ORDERS.REJECTED", null));
+        Runs.View watched = finished(runs, runs.start(ordersRun(60, new Faults.Spec(50, List.of("empty"), REJECTED), 5, null)).id());
+        dry.open(Map.of("route", "ORDERS.IN > ORDERS.OUT, invalid > ORDERS.REJECTED")).send("ORDERS.IN", "", Map.of());
+        List<Observer.Recent> arrivals = monitors.list().get(0).watch().recent();
+        assertEquals(watched.invalid() + 1, arrivals.size());
+        assertNull(arrivals.get(0).run(), "the one sent by hand");
+        assertTrue(arrivals.stream().skip(1).allMatch(a -> watched.id().equals(a.run()) && "invalid-expected".equals(a.outcome())), arrivals.toString());
+        monitors.stop(watching.id());
+        // all of them invalid: there are no valid messages, and no check that says "0 sent, 0 arrived" about them
+        Runs.View allInvalid = finished(runs, runs.start(ordersRun(20, new Faults.Spec(100, List.of("empty"), REJECTED), 5, null)).id());
+        assertEquals(1, allInvalid.checks().size(), allInvalid.checks().toString());
+        assertTrue(allInvalid.checks().get(0).invalid() && allInvalid.checks().get(0).sent() == 20 && "PASS".equals(allInvalid.verdict()));
+
         // a message with a field taken out is still well-formed: the stand-in lets it through, and the run says so
         Runs.View lenient = finished(runs, runs.start(ordersRun(60, new Faults.Spec(30, List.of("field-removed"), REJECTED), 1, null)).id());
         assertEquals("FAIL", lenient.verdict());
@@ -654,6 +671,13 @@ class LoadTest {
         assertEquals(40, monitors.list().get(0).watch().count());
         assertEquals(40, monitors.list().get(0).watch().tables().get(0).values().stream().mapToLong(Observer.Count::count).sum());
         assertEquals(1, opened.get(), "one subscription for the two of them");
+        // the monitor's list says which run each arrival belonged to, and what that run made of it
+        List<Observer.Recent> seen = monitors.list().get(0).watch().recent();
+        assertTrue(seen.stream().allMatch(a -> run.id().equals(a.run()) && "valid-expected".equals(a.outcome()) && a.message() != null), seen.get(0).toString());
+        // and it counts on through a reset: the count starts again, the total does not
+        monitors.reset(monitor.id());
+        assertEquals(0, monitors.list().get(0).watch().count());
+        assertEquals(40, monitors.list().get(0).watch().total());
         assertEquals(0, closed.get(), "and the run did not close it when it ended: the monitor is still listening");
         assertEquals(1, consumers.get("REJECTS").size());
 
@@ -995,6 +1019,77 @@ class LoadTest {
         assertEquals("PASS", arrived.verdict());
         assertEquals("Dry run / Q.${HOME}", arrived.checks().get(0).expected());
         assertEquals(3, arrived.watched().get(0).count());
+    }
+
+    @Test
+    void anOverrideMayBeAnExpressionAndAConnectionShowsWhatItsVariablesStandFor(@TempDir Path dir) throws Exception {
+        // A plain override is the value. One that holds a placeholder is rendered at each use, like the pack field it stands in for:
+        // that is how a control narrows a range for one run.
+        Map<String, String> fields = Map.of("total", "{{decimal 1 1000 2}}", "currency", "{{pick GBP EUR}}");
+        for (int i = 0; i < 50; i++) {
+            String[] out = engine.render("{{total}}|{{total}}|{{currency}}|{{note}}", fields, Map.of("total", "{{decimal 5 6 2}}", "currency", "JPY", "note", "a {{literal")).split("\\|");
+            assertTrue(Double.parseDouble(out[0]) >= 5 && Double.parseDouble(out[0]) <= 6 && Double.parseDouble(out[1]) >= 5 && Double.parseDouble(out[1]) <= 6, out[0] + " " + out[1]);
+            assertEquals("JPY", out[2]);
+            assertEquals("a {{literal", out[3], "text that only looks like the start of one is left alone");
+        }
+        assertTrue(java.util.stream.IntStream.range(0, 20).mapToObj(i -> engine.render("{{total}}", fields, Map.of("total", "{{decimal 5 6 2}}"))).distinct().count() > 1, "rendered anew each time");
+        assertThrows(IllegalArgumentException.class, () -> engine.render("{{total}}", fields, Map.of("total", "{{nope}}")));
+
+        // A name or a queue written with a variable is shown by what it stands for; what cannot be read stays as written. Settings are never filled in.
+        Sink sink = new Sink();
+        Connections store = store(dir, sink, new DryRunType());
+        store.save(new Connections.Connection("dry-run", "Home ${HOME}", "dry-run", Map.of("route", "A > ${HOME}"), List.of("Q.${HOME}", "PLAIN", "${PATH}", "${MSGFORGE_NOT_SET_ANYWHERE}")));
+        Connections.View view = store.get("dry-run");
+        assertEquals("Home ${HOME}", view.name());
+        assertEquals("Home " + System.getenv("HOME"), view.title());
+        assertEquals(Map.of("Q.${HOME}", "Q." + System.getenv("HOME")), view.queues());
+        assertEquals("A > ${HOME}", view.settings().get("route"));
+        assertEquals(sink.label(), store.get(only(store)).title());
+
+        // the last check of a connection is remembered until it is checked again or deleted
+        assertTrue(store.statuses().isEmpty());
+        Connections.Status up = store.check("dry-run");
+        assertTrue(up.ok() && up.error() == null && up.at() != null);
+        TransportType refusing = new TransportType() {
+            public String id() { return "down"; }
+            public String label() { return "Down"; }
+            public List<Field> fields() { return List.of(new Field("password", "Password", "", false, true)); }
+            public Sender open(Map<String, String> settings) { throw new IllegalStateException("connection refused (login " + settings.get("password") + ")"); }
+        };
+        Connections other = new Connections(new ConfigStore(dir.resolve("d.json").toString(), new ObjectMapper()), List.of(refusing));
+        String id = other.save(new Connections.Connection(null, "Broker", "down", Map.of("password", "s3cret"), List.of())).id();
+        Connections.Status down = other.check(id);
+        assertFalse(down.ok());
+        assertEquals("connection refused (login ***)", down.error(), "the same care as any other error from a connection");
+        assertEquals(Map.of(id, down), other.statuses());
+        other.delete(id);
+        assertTrue(other.statuses().isEmpty());
+        assertThrows(java.util.NoSuchElementException.class, () -> other.check(id));
+    }
+
+    @Test
+    void aThemeIsOneStyleSheetAndNothingElseIsEverServedForIt(@TempDir Path dir) throws Exception {
+        Path css = Files.writeString(dir.resolve("team.css"), ":root { --accent: #00aeef; }");
+        Console themed = new Console(css.toString(), "  Orders bench  ");
+        assertEquals(":root { --accent: #00aeef; }", themed.theme().getBody());
+        assertEquals("text/css;charset=UTF-8", themed.theme().getHeaders().getFirst("Content-Type"));
+        assertEquals("Orders bench", themed.console().get("title"));
+        assertEquals(true, themed.console().get("theme"));
+        Files.writeString(css, "body { color: navy; }");
+        assertEquals("body { color: navy; }", themed.theme().getBody(), "read at each request: an edit shows at the next reload");
+
+        // whatever the setting names, only a .css file of a sane size is sent; anything else is an empty sheet that says why
+        Path secret = Files.writeString(dir.resolve("msgforge.json"), "{\"password\":\"s3cret\"}");
+        assertEquals("/* MSGFORGE_THEME must name a .css file */", new Console(secret.toString(), null).theme().getBody());
+        assertEquals("/* the file MSGFORGE_THEME names is not there */", new Console(dir.resolve("gone.css").toString(), null).theme().getBody());
+        assertEquals("/* the file MSGFORGE_THEME names is not there */", new Console(Files.createDirectory(dir.resolve("folder.css")).toString(), null).theme().getBody());
+        Path big = Files.writeString(dir.resolve("big.css"), "a{}".repeat(200_000));
+        assertEquals("/* the theme is larger than 512 KB */", new Console(big.toString(), null).theme().getBody());
+        Console plain = new Console(" ", "");
+        assertEquals("", plain.theme().getBody());
+        assertNull(plain.console().get("title"));
+        assertEquals(false, plain.console().get("theme"));
+        assertEquals(40, ((String) new Console(null, "x".repeat(90)).console().get("title")).length());
     }
 
     // ---- what a run measures

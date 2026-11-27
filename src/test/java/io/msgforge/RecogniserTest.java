@@ -311,6 +311,8 @@ class RecogniserTest {
         long took = (System.nanoTime() - began) / 1_000_000;
         assertEquals(70_000, many.replacements().size());
         assertEquals(new Recogniser.Replacement(35_000, "000088b7-0000-4000-8000-000000000000", "{{uuid}}", null), many.replacements().get(69_998));
-        assertTrue(took < 3_000, "took " + took + " ms");
+        // The bound is generous on purpose: a busy machine took 11 seconds over what takes one, and the mistake this
+        // guards against (every hit checked against every earlier one) takes minutes at this size, not seconds.
+        assertTrue(took < 60_000, "took " + took + " ms");
     }
 }
