@@ -722,6 +722,27 @@ class ApiTest {
     // ---- what the console asks about itself and its connections
 
     @Test
+    void aPresetRunsOnTheEnvironmentItIsAskedTo() throws Exception {
+        String a = sent(post("/api/connections"), "{\"name\":\"Env A\",\"type\":\"dry-run\",\"destinations\":[\"${In}\"],\"vars\":{\"In\":\"A.IN\"}}").path("id").asText();
+        String b = sent(post("/api/connections"), "{\"name\":\"Env B\",\"type\":\"dry-run\",\"destinations\":[\"${In}\"],\"vars\":{\"In\":\"B.IN\"}}").path("id").asText();
+        String s = sent(post("/api/scenarios"), "{\"name\":\"On A\",\"parts\":[{\"pack\":\"demo\",\"template\":\"order.json\",\"weight\":1}],"
+                + "\"targets\":[{\"connection\":\"" + a + "\",\"destination\":\"${In}\"}],\"count\":1,\"rate\":0}").path("id").asText();
+        try {
+            mvc.perform(post("/api/scenarios/" + s + "/run")).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.targets[0].connectionId").value(a)).andExpect(jsonPath("$.targets[0].destination").value("A.IN"));
+            mvc.perform(post("/api/scenarios/" + s + "/run").param("env", b)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.targets[0].connectionId").value(b)).andExpect(jsonPath("$.targets[0].destination").value("B.IN"));
+            mvc.perform(post("/api/scenarios/" + s + "/run").param("env", "Env B")).andExpect(status().isOk()).andExpect(jsonPath("$.targets[0].connectionId").value(b));
+            mvc.perform(post("/api/scenarios/" + s + "/run").param("env", "nowhere")).andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error", containsString("No environment nowhere")));
+        } finally {
+            mvc.perform(delete("/api/scenarios/" + s));
+            mvc.perform(delete("/api/connections/" + a));
+            mvc.perform(delete("/api/connections/" + b));
+        }
+    }
+
+    @Test
     void theConsoleLearnsItsTitleItsThemeAndWhetherAConnectionAnswers() throws Exception {
         mvc.perform(get("/api/console")).andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Orders bench")).andExpect(jsonPath("$.theme").value(true));
         mvc.perform(get("/theme.css")).andExpect(status().isOk()).andExpect(header().string("Content-Type", "text/css;charset=UTF-8"))
@@ -747,6 +768,7 @@ class ApiTest {
             String html = mvc.perform(get(at)).andReturn().getResponse().getContentAsString();
             assertTrue(html.contains("src=\"app.js?v=" + hash + "\"") && html.contains("href=\"app.css?v=" + hash + "\""), html.substring(0, 600));
         }
+        assertFalse(Console.hash("a").equals(Console.hash("b")));
 
         // a connection's last check: asked for, remembered, listed by id
         mvc.perform(post("/api/connections/dry-run/check")).andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
@@ -768,7 +790,6 @@ class ApiTest {
         // and only a variable listed to be shown: one a connection may use is not thereby one the console gives out
         JsonNode kept = sent(post("/api/connections"), "{\"name\":\"${MSGFORGE_CONFIG} ${JAVA_HOME}\",\"type\":\"dry-run\",\"destinations\":[\"${MSGFORGE_CONFIG}\"]}");
         assertEquals("${MSGFORGE_CONFIG} ${JAVA_HOME}", kept.get("title").asText());
-        assertFalse(Console.hash("a").equals(Console.hash("b")));
         assertEquals(0, kept.get("queues").size());
         mvc.perform(delete("/api/connections/" + kept.get("id").asText())).andExpect(status().isOk());
         mvc.perform(delete("/api/connections/" + made.get("id").asText())).andExpect(status().isOk());

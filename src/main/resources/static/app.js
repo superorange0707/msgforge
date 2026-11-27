@@ -236,7 +236,22 @@ function fillEnvMenu() {
   menu.append(el('hr'));
   menuItem(menu, 'Manage environments…', { click: () => go('settings', 'envs') });
 }
+// A queue as shown for one environment, as the other shows it: the same name as written (${Input} is each one's own
+// Input), so a plan moved from SIT to UAT sends, expects and watches on UAT's queues. A name written plainly stays.
+const moveQ = (from, to, shown) => (shown || '').trim() ? showQ(to, writeQ(from, shown)) : shown;
+// Everything the workbench holds that names the environment moves with it: every queue field, and each target,
+// expectation and watch of the plan that was on the old environment. Anything on another connection stays there.
+function moveTo(from, to) {
+  if (!from || from === to || !conn(from)) return;
+  for (const f of ['sQueue', 'sArrive', 'lQueue', 'lArrive', 'lReject']) { $(f).value = moveQ(from, to, $(f).value); $(f).dataset.env = to; }
+  state.send.queue = $('sQueue').value; state.send.arrive = $('sArrive').value;
+  const plan = state.plan;
+  for (const t of [...plan.extra, ...plan.watches]) if (t.connection === from) { t.connection = to; t.destination = moveQ(from, to, t.destination); }
+  for (const p of plan.parts) if ((p.toConn || from) === from) { p.toConn = to; p.to = moveQ(from, to, p.to); }
+  renderPlan();
+}
 function pickEnv(id) {
+  moveTo(state.env, id);
   state.env = id;
   const watching = state.monitors.find(m => m.connectionId === id);   // the Rejects page follows the environment, where it has a monitor
   if (watching) state.monitor = watching.id;
@@ -1229,7 +1244,7 @@ function renderPresetTable() {
     const load = s.load || {}, parts = s.parts || [], acts = el('td', 'acts'), run = el('button', 'ghost'), edit = el('button', 'ghost', 'Edit'), del = el('button', 'ghost danger');
     const plan = [(s.rate ? rate(s.rate) + '/s' : 'as fast as possible'), s.count ? num(s.count) : load.durationSeconds ? load.durationSeconds + ' s' : load.unlimited ? 'until stopped' : ''].filter(Boolean).join(' · ');
     const checks = [parts.filter(p => p.expect).length ? new Set(parts.filter(p => p.expect).map(p => p.expect.destination)).size + ' queue' + (new Set(parts.filter(p => p.expect).map(p => p.expect.destination)).size > 1 ? 's' : '') : null, s.invalid?.expect ? 'rejects' : null].filter(Boolean).join(', ');
-    run.innerHTML = icon('play'); run.append('Run'); run.onclick = () => api(`/scenarios/${s.id}/run`, { method: 'POST' }).then(r => { state.liveRun = r.id; state.live = null; fillPlan(s); go(s.count === 1 ? 'send' : 'load'); refresh(); }, failed);
+    run.innerHTML = icon('play'); run.append('Run'); run.onclick = () => api(`/scenarios/${s.id}/run` + (state.env ? '?env=' + encodeURIComponent(state.env) : ''), { method: 'POST' }).then(r => { state.liveRun = r.id; state.live = null; fillPlan(s); go(s.count === 1 ? 'send' : 'load'); refresh(); }, failed);
     edit.onclick = () => { fillPlan(s); go('load'); };
     del.innerHTML = icon('trash'); del.setAttribute('aria-label', 'Delete ' + s.name); del.title = 'Delete';
     del.onclick = async () => { if (await ask({ title: 'Delete preset?', text: s.name, ok: 'Delete', danger: true })) api('/scenarios/' + s.id, { method: 'DELETE' }).then(loadScenarios, failed); };

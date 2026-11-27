@@ -205,9 +205,10 @@ public class Api {
         scenarios.delete(id);
     }
 
+    /** env, when given, runs it on that environment (a connection's id or name), as the console's Load and --env do. */
     @PostMapping("/scenarios/{id}/run")
-    public Runs.View runScenario(@PathVariable String id) {
-        return scenarios.run(id);
+    public Runs.View runScenario(@PathVariable String id, @org.springframework.web.bind.annotation.RequestParam(required = false) String env) {
+        return scenarios.run(id, new Scenarios.Overrides(null, null, null, null, null, null, null, env == null || env.isBlank() ? null : env));
     }
 
     // ---- runs
