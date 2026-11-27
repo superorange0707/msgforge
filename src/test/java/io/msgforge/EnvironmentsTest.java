@@ -123,6 +123,28 @@ class EnvironmentsTest {
     }
 
     @Test
+    void aBroadShowPatternNeverHandsOutASecret(@TempDir Path dir) {
+        Map<String, String> env = Map.of("MSGFORGE_UNUSED_TOKEN", "tok-123", "MSGFORGE_api_key", "k-1", "MSGFORGE_LOGIN_VALUE", "pw-9", "MSGFORGE_REGION", "north");
+        Connections store = new Connections(new ConfigStore(dir.resolve("msgforge.json").toString(), new ObjectMapper()), List.of(FAKE), new String[0], new String[] {"*"});
+        store.env = env::get;
+        // named like a secret: never shown, though nothing uses it as one
+        String a = store.save(new Connections.Connection(null, "${MSGFORGE_UNUSED_TOKEN} ${MSGFORGE_api_key}", "fake", Map.of("host", "${MSGFORGE_REGION}"), List.of())).id();
+        assertEquals("${MSGFORGE_UNUSED_TOKEN} ${MSGFORGE_api_key}", store.get(a).title());
+        assertEquals(Map.of("host", "north"), store.get(a).values(), "a plain name is shown, as listed");
+        // once a password, always a secret: clearing the field, or deleting the connection, does not make it showable
+        String b = store.save(new Connections.Connection(null, "B", "fake", Map.of("host", "h", "password", "${MSGFORGE_LOGIN_VALUE}"), List.of())).id();
+        store.save(new Connections.Connection(b, "${MSGFORGE_LOGIN_VALUE}", "fake", Map.of("host", "h", "password", ""), List.of()));
+        assertTrue(store.get(b).secretsSet().isEmpty(), "the password was cleared");
+        assertEquals("${MSGFORGE_LOGIN_VALUE}", store.get(b).title());
+        store.delete(b);
+        String c = store.save(new Connections.Connection(null, "C ${MSGFORGE_LOGIN_VALUE}", "fake", Map.of("host", "${MSGFORGE_LOGIN_VALUE}"), List.of())).id();
+        assertEquals("C ${MSGFORGE_LOGIN_VALUE}", store.get(c).title());
+        assertTrue(store.get(c).values().isEmpty());
+        String all = store.list().toString();
+        assertFalse(all.contains("tok-123") || all.contains("k-1") || all.contains("pw-9"), all);
+    }
+
+    @Test
     void aRunFillsInTheVarsOfTheConnectionItUsesAndNamesTheQueueItHas(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("msgforge.json"), """
                 {"connections":[{"id":"sit","name":"SIT","type":"dry-run","destinations":["${Input}"],"vars":{"Input":"SIT.IN"}},

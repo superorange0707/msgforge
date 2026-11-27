@@ -230,7 +230,7 @@ class MsgforgeTest {
 
         // What a view shows of a variable. By default the environment's name and nothing else: a connection or a queue
         // named after the variable that holds a password comes back as written.
-        Map<String, String> environment = Map.of("MSGFORGE_ENV", "SIT", "MSGFORGE_MQ_PASSWORD", "dummy-mq-pw", "MSGFORGE_REGION", "north");
+        Map<String, String> environment = Map.of("MSGFORGE_ENV", "SIT", "MSGFORGE_MQ_PASSWORD", "dummy-mq-pw", "MSGFORGE_REGION", "north", "MSGFORGE_LOGIN", "dummy-login");
         Connections kit = new Connections(new ConfigStore(dir.resolve("kit.json").toString(), new ObjectMapper()), List.of(type));
         kit.env = environment::get;
         Connections.View sit = kit.save(new Connections.Connection("mq", "${MSGFORGE_ENV}", "fake", Map.of("host", "h", "password", "${MSGFORGE_MQ_PASSWORD}"),
@@ -242,14 +242,16 @@ class MsgforgeTest {
         assertTrue(leak.queues().isEmpty());
         assertFalse(kit.list().toString().contains("dummy-mq-pw") || kit.list().toString().contains("north"), kit.list().toString());
         // Listed in MSGFORGE_SHOW, a variable is shown, unless some connection keeps a secret in it: a slip in that list
-        // does not hand out a password. A setting its type does not declare counts as a secret.
+        // does not hand out a password. A setting its type does not declare counts as a secret. A name that says
+        // it is a password is never shown, listed or not.
         Connections wide = new Connections(new ConfigStore(dir.resolve("wide.json").toString(), new ObjectMapper()), List.of(type), new String[0],
-                new String[] {" MSGFORGE_REGION ", "MSGFORGE_MQ_PASSWORD", "MSGFORGE_ENV"});
+                new String[] {" MSGFORGE_REGION ", "MSGFORGE_LOGIN", "MSGFORGE_MQ_PASSWORD", "MSGFORGE_ENV"});
         wide.env = environment::get;
-        String a = wide.save(new Connections.Connection(null, "${MSGFORGE_REGION} ${MSGFORGE_MQ_PASSWORD}", "fake", Map.of("host", "${MSGFORGE_REGION}"), List.of("Q.${MSGFORGE_REGION}"))).id();
-        assertEquals("north dummy-mq-pw", wide.get(a).title(), "nobody uses it as a secret, and whoever started msgforge listed it");
-        wide.save(new Connections.Connection(null, "B", "fake", Map.of("host", "h", "password", "p-${MSGFORGE_MQ_PASSWORD}"), List.of()));
-        assertEquals("${MSGFORGE_REGION} ${MSGFORGE_MQ_PASSWORD}", wide.get(a).title());
+        String a = wide.save(new Connections.Connection(null, "${MSGFORGE_REGION} ${MSGFORGE_LOGIN}", "fake", Map.of("host", "${MSGFORGE_REGION}"), List.of("Q.${MSGFORGE_REGION}"))).id();
+        assertEquals("north dummy-login", wide.get(a).title(), "nobody uses it as a secret, and whoever started msgforge listed it");
+        assertEquals("pw ${MSGFORGE_MQ_PASSWORD}", wide.get(wide.save(new Connections.Connection(null, "pw ${MSGFORGE_MQ_PASSWORD}", "fake", Map.of("host", "h"), List.of())).id()).title());
+        wide.save(new Connections.Connection(null, "B", "fake", Map.of("host", "h", "password", "p-${MSGFORGE_LOGIN}"), List.of()));
+        assertEquals("${MSGFORGE_REGION} ${MSGFORGE_LOGIN}", wide.get(a).title());
         assertEquals(Map.of("Q.${MSGFORGE_REGION}", "Q.north"), wide.get(a).queues());
         // in a file written by hand: a key the type does not know, and a type that is not installed
         Files.writeString(dir.resolve("hand.json"), """

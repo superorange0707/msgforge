@@ -117,7 +117,11 @@ public class Connections {
     private String shown(String written) {
         if (!written.contains("${")) return written;
         Matcher m = ENV.matcher(written);
-        while (m.find()) if (show.stream().noneMatch(p -> p.matcher(m.group(1)).matches()) || secretNames().contains(m.group(1))) return written;
+        java.util.Set<String> secrets = secretNames();
+        while (m.find()) {
+            String name = m.group(1);
+            if (show.stream().noneMatch(p -> p.matcher(name).matches()) || secrets.contains(name) || SECRET_LOOKING.matcher(name).find()) return written;
+        }
         try {
             return resolve(written);
         } catch (RuntimeException e) {
@@ -126,8 +130,18 @@ public class Connections {
     }
 
     /**
-     * The variables some connection keeps a secret in. A setting counts as secret unless its type declares it and
-     * declares it not to be: a key the type does not know, or a type that is not installed, may hold anything.
+     * A variable whose name says it holds a secret is never shown, whatever MSGFORGE_SHOW says: a broad pattern
+     * (MSGFORGE_*) must not hand out MSGFORGE_API_TOKEN because no connection happens to use it yet.
+     */
+    static final Pattern SECRET_LOOKING = Pattern.compile("PASS|PWD|TOKEN|SECRET|KEY|CREDENTIAL|AUTH|PRIVATE", Pattern.CASE_INSENSITIVE);
+
+    /** Every variable a secret setting has named since msgforge started: clearing the setting does not make it showable. */
+    private final java.util.Set<String> onceSecret = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * The variables some connection keeps a secret in, or kept one in since msgforge started. A setting counts as
+     * secret unless its type declares it and declares it not to be: a key the type does not know, or a type that is
+     * not installed, may hold anything.
      */
     private java.util.Set<String> secretNames() {
         java.util.Set<String> names = new java.util.HashSet<>();
@@ -141,6 +155,8 @@ public class Connections {
                 while (m.find()) names.add(m.group(1));
             });
         }
+        onceSecret.addAll(names);
+        names.addAll(onceSecret);
         return names;
     }
 
@@ -222,6 +238,7 @@ public class Connections {
 
     /** Creates (blank id) or replaces a connection. */
     public synchronized View save(Connection incoming) {
+        secretNames();   // what the connection's secrets named until now stays secret after this edit
         Connection c = clean(incoming);
         int at = c.id() == null ? -1 : indexOf(c.id());
         if (at < 0) {
@@ -235,6 +252,7 @@ public class Connections {
     }
 
     public synchronized void delete(String id) {
+        secretNames();
         statuses.remove(id);
         connections.remove(find(id));
         persist();
