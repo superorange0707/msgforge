@@ -96,8 +96,11 @@ final class Faults {
             case "empty" -> "";
             case "garbage" -> "@@ not a message @@ " + Long.toString(random.nextLong() >>> 1, 36);
             case "truncated" -> {
-                if (body.length() < 2) yield body.isEmpty() ? null : "";
-                int cut = 1 + random.nextInt(body.length() - 1);
+                // Cut inside what the message says, not in the blank space after it: a message that only lost its last
+                // line break is as valid as it was, and a system that accepts it has done nothing wrong.
+                int end = body.stripTrailing().length();
+                if (end < 2) yield body.isEmpty() ? null : "";
+                int cut = 1 + random.nextInt(end - 1);
                 if (Character.isHighSurrogate(body.charAt(cut - 1))) cut--;   // never half a character
                 yield body.substring(0, cut);
             }

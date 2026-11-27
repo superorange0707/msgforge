@@ -274,6 +274,13 @@ class LoadTest {
             builder.parse(new InputSource(new StringReader(retyped)));
             assertTrue(retyped.contains("<Weight unit=\"kg\">not-a-number</Weight>"), "the one value that reads as a number: " + retyped);
         }
+        // a cut never falls in the blank space after the message: what only lost its last line break would still be valid
+        for (int i = 0; i < 300; i++) {
+            String cut = Faults.apply("truncated", "{\"a\":1}\n\n  ", random, null);
+            assertTrue(cut.length() < 7 && "{\"a\":1}".startsWith(cut), cut);
+            assertTrue(DryRunType.flaw(cut) != null, "no longer well-formed: " + cut);
+        }
+        assertEquals("", Faults.apply("truncated", "x\n", random, null));
         // XML with nothing that reads as a number: a simple element becomes one with a child
         assertEquals("<a><b><value>text</value></b></a>", Faults.apply("type-changed", "<a><b>text</b></a>", random, null));
         // a DOCTYPE is not parsed, so no entity is ever resolved
