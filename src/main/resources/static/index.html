@@ -67,6 +67,12 @@
           <button type="button" class="switch" id="sCheck" role="switch" aria-checked="false"><i class="t"></i>Check arrival</button>
         </div>
         <label class="inp" id="sArriveBox" hidden><span>Arrives on</span><input id="sArrive" list="queues" autocomplete="off"></label>
+        <details class="more" id="sMore">
+          <summary>More</summary>
+          <div class="morebody">
+            <label class="inp"><span>Overrides</span><textarea class="vars" id="sVars" rows="2" spellcheck="false" autocomplete="off" placeholder="name=value"></textarea></label>
+          </div>
+        </details>
         <div class="act"><button class="go" data-icon="send">Send</button></div>
         <div id="recentBox" hidden>
           <h4>Recent</h4>
@@ -109,6 +115,7 @@
               <label class="inp"><span>Match</span><input id="lMatch" autocomplete="off" placeholder="{{uuid}}"></label>
             </div>
             <label class="inp"><span>Headers</span><input id="lHeaders" placeholder="name=value" autocomplete="off"></label>
+            <label class="inp" id="lVarsBox"><span>Overrides</span><textarea class="vars" id="lVars" rows="2" spellcheck="false" autocomplete="off" placeholder="name=value"></textarea></label>
             <div class="row">
               <button type="button" class="switch" id="lUnlimited" role="switch" aria-checked="false"><i class="t"></i>Until stopped</button>
               <button type="button" class="ghost" id="mixStart">Mix templates</button>
@@ -186,7 +193,7 @@
 <dialog class="modal" id="pasteDialog" aria-labelledby="pasteTitle">
   <div class="mhead"><h2 id="pasteTitle">New template from a message</h2><span class="sp"></span><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
   <div class="dsplit">
-    <div><h4><label for="paste">Paste</label></h4><textarea id="paste" spellcheck="false" wrap="off"></textarea></div>
+    <div><h4><label for="paste">Paste</label><button type="button" class="ghost" id="pasteOpen">Open file</button><input type="file" id="pasteFile" hidden></h4><textarea id="paste" spellcheck="false" placeholder="A message, or drop a file"></textarea></div>
     <div><h4>Template</h4><div class="out ink code" id="recog"></div></div>
   </div>
   <form class="dfoot" id="pasteForm">

@@ -58,10 +58,13 @@ public class Console {
     private String sheet() {
         if (theme == null) return "";
         try {
-            if (!theme.getFileName().toString().toLowerCase().endsWith(".css")) return "/* MSGFORGE_THEME must name a .css file */";
-            if (!Files.isRegularFile(theme)) return "/* the file MSGFORGE_THEME names is not there */";
-            if (Files.size(theme) > MAX_THEME_BYTES) return "/* the theme is larger than " + MAX_THEME_BYTES / 1024 + " KB */";
-            return Files.readString(theme, StandardCharsets.UTF_8);
+            if (!Files.exists(theme)) return "/* the file MSGFORGE_THEME names is not there */";
+            // The file itself, wherever links lead: a link called theme.css to something else is that something else.
+            Path file = theme.toRealPath();
+            if (!file.getFileName().toString().toLowerCase().endsWith(".css")) return "/* MSGFORGE_THEME must name a .css file */";
+            if (!Files.isRegularFile(file)) return "/* the file MSGFORGE_THEME names is not there */";
+            if (Files.size(file) > MAX_THEME_BYTES) return "/* the theme is larger than " + MAX_THEME_BYTES / 1024 + " KB */";
+            return Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException e) {   // unreadable, or not text
             return "/* the theme could not be read */";
         }

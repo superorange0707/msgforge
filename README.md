@@ -50,10 +50,12 @@ The top bar has four modes, the environment the messages go to, and a gear.
 | **Load** | a run to a plan: rate, messages or duration, ramp-up, senders, seed, a share of invalid messages, and whether rejects are checked. Presets (saved scenarios) are at the top: one click fills the form, Save as preset keeps what you changed. The run in progress is under the message: sent, rate, send time, and where its messages ended up. More holds what is needed less often: where valid messages arrive, timeout and match, headers, a mix of templates, further queues to send to, queues to watch. |
 | **Rejects** | the queues msgforge watches, a reject queue say: how many arrived since the last reset, by each value they are grouped by, and for each arrival the run that sent it and whether that was a message made invalid on purpose. |
 | **Reports** | the runs msgforge still has and the reports it saved, with their HTML, JSON and CSV. A click opens a run in full. |
-| **Environment** (top right) | a connection: where Send and Load send. The dot is green when its broker answered the last check. The choice is kept per browser. |
+| **Environment** (top right) | a connection: where Send and Load send. The dot says how it last did, green or red: when Test was last pressed (under Settings), or when a run last opened it. Nothing checks by itself, so a wrong password is tried when you ask, not each time the page is opened. The choice is kept per browser. |
 | **Settings** (the gear) | everything that is configuration: environments (connections and their queues), templates and packs, presets, reject queues. |
 
-A new template is easiest made from a real message: "Paste a message…" in the template menu shows beside it what msgforge would turn into placeholders, and saves the result.
+A new template is easiest made from a real message: "Paste a message…" in the template menu shows beside it what msgforge would turn into placeholders, and saves the result. A file works the same way: Open file in that dialog, or drop it there.
+
+A variable that has no control above the message is fixed under More, in Send and in Load: Overrides, one `name=value` a line.
 
 Connections, presets (scenarios) and saved reject queues (monitors) are kept in `msgforge.json`, packs in the `packs/` folder. Both are plain files you can copy to another machine.
 
@@ -65,7 +67,7 @@ Connections, presets (scenarios) and saved reject queues (monitors) are kept in 
 :root, :root[data-theme="light"] { --accent: #0b6e4f; --accent-line: #0b6e4f; --grad: #0b6e4f; --glow: none; }
 ```
 
-The file is read at each request, so an edit shows at the next reload. Only a `.css` file up to 512 KB is served, as a style sheet and nothing else; a file that is missing gives no theme, not a broken page. `MSGFORGE_TITLE` replaces the name in the top left and in the browser tab (up to 40 characters).
+The file is read at each request, so an edit shows at the next reload. Only a `.css` file up to 512 KB is served, as a style sheet and nothing else (a link is followed first: it is the file it leads to that must be one); a file that is missing gives no theme, not a broken page. `MSGFORGE_TITLE` replaces the name in the top left and in the browser tab (up to 40 characters).
 
 ## Templates
 
@@ -100,7 +102,7 @@ Import a real message and msgforge marks what has to differ from one message to 
 <Label>3f2b8c1e-9a4d-4e7b-8c21-5d6f7a8b9c0d</Label>                <Label>{{ShipmentId}}</Label>
 ```
 
-The way in is "Paste a message…", in the template menu and under Settings › Templates: paste on the left, and the template msgforge makes of it is on the right, with what it found counted below. Placeholders that are one of the pack's fields are green, generators blue. Nothing is written until you give it a name and save. The wand in the editor does the same for a template that is already there, as an unsaved edit.
+The way in is "Paste a message…", in the template menu and under Settings › Templates: paste on the left (or open a file, or drop one), and the template msgforge makes of it is on the right, with what it found counted below. Placeholders that are one of the pack's fields are green, generators blue. Nothing is written until you give it a name and save. The wand in the editor does the same for a template that is already there, as an unsaved edit.
 
 Both use the pack's fields as well (the last row of the table): a whole value that is one of a field's choices becomes that field.
 
@@ -139,7 +141,7 @@ packs/
       reading.csv
 ```
 
-Fields are named placeholders the pack's templates share, for example `carrier` = `{{pick "Northwind Freight" "Blue Harbor"}}`. In the console a field that is a `{{pick …}}` is a dropdown above the message (Any, or one of its choices), and one that is a `{{decimal MIN MAX N}}` or `{{int MIN MAX}}` is a pair of numbers: what you choose there is an override for the run, the same thing as `"vars": {"carrier": "Blue Harbor"}` in a request. An override is usually a plain value; one that holds a placeholder (`{{decimal 5 50 2}}`) is rendered for each message, which is how the pair of numbers narrows a range.
+Fields are named placeholders the pack's templates share, for example `carrier` = `{{pick "Northwind Freight" "Blue Harbor"}}`. In the console a field that is a `{{pick …}}` is a dropdown above the message (Any, or one of its choices), and one that is a `{{decimal MIN MAX N}}` or `{{int MIN MAX}}` is a pair of numbers: what you choose there is an override for the run, the same thing as `"vars": {"carrier": "Blue Harbor"}` in a request. An override is usually a plain value; one that holds a placeholder (`{{decimal 5 50 2}}`) is rendered for each message, which is how the pair of numbers narrows a range. That is new in 0.3: before, an override was always used as it stood, so a request that relied on `{{` arriving literally in a value now has to send that text another way (in the template, or raw).
 
 Packs are read from disk on every request, so a folder you drop in shows up without a restart. To mount packs kept somewhere else, list the folders; new packs are created in the first one:
 

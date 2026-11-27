@@ -1112,6 +1112,10 @@ class LoadTest {
         assertEquals("/* MSGFORGE_THEME must name a .css file */", new Console(secret.toString(), null).theme().getBody());
         assertEquals("/* the file MSGFORGE_THEME names is not there */", new Console(dir.resolve("gone.css").toString(), null).theme().getBody());
         assertEquals("/* the file MSGFORGE_THEME names is not there */", new Console(Files.createDirectory(dir.resolve("folder.css")).toString(), null).theme().getBody());
+        // a link is followed first: called .css, it is still the file it leads to, and that is not a style sheet
+        Path link = Files.createSymbolicLink(dir.resolve("link.css"), secret);
+        assertEquals("/* MSGFORGE_THEME must name a .css file */", new Console(link.toString(), null).theme().getBody());
+        assertEquals("body { color: navy; }", new Console(Files.createSymbolicLink(dir.resolve("alias.css"), css).toString(), null).theme().getBody());
         Path big = Files.writeString(dir.resolve("big.css"), "a{}".repeat(200_000));
         assertEquals("/* the theme is larger than 512 KB */", new Console(big.toString(), null).theme().getBody());
         Console plain = new Console(" ", "");
@@ -1228,6 +1232,9 @@ class LoadTest {
         assertTrue(html.contains("@media print"));
         assertThrows(IllegalArgumentException.class, () -> reports.render(detail, "pdf"));
         assertEquals("cut &lt; &amp; &#39;", Reports.esc("cut < & '"));
+        // the time axis is labelled at whole seconds, each once: four seconds are 0:00 to 0:04
+        String axis = Reports.chart(java.util.stream.IntStream.range(0, 4).mapToObj(i -> new Stats.Point(i, 1, null, 10, 0, 0)).toList());
+        for (String label : List.of("0:00", "0:01", "0:02", "0:03", "0:04")) assertEquals(2, axis.split(">" + label + "<", -1).length, label + " in " + axis);
         assertEquals("'-1+1", Reports.cell("-1+1"));
         assertEquals("-1", Reports.cell(-1));
         assertEquals("\"a,b\"", Reports.cell("a,b"));

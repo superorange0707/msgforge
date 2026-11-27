@@ -749,7 +749,8 @@ public class Runs {
             boolean unsaved = p.pack() == null || p.pack().isBlank();   // a body sent as it is, with no pack to take fields from
             if (unsaved && p.body() == null) throw new IllegalArgumentException("Pack is required");
             Map<String, String> fields = unsaved ? Map.of() : packs.get(p.pack()).fields();
-            String name = p.template() == null || p.template().isBlank() ? (raw ? "raw" : "body") : p.template();
+            // A raw text that was given is not the template's: it is listed as raw, whatever template was open when it was typed.
+            String name = raw && p.body() != null ? "raw" : p.template() == null || p.template().isBlank() ? (raw ? "raw" : "body") : p.template();
             Map<String, String> vars = new LinkedHashMap<>();
             if (req.vars() != null) vars.putAll(req.vars());
             if (p.vars() != null) vars.putAll(p.vars());
@@ -917,10 +918,13 @@ public class Runs {
                         opened.add(senders[i]);
                     }
                     if (check) senders[i].check();
+                    connections.noted(id, null);   // the console shows how a connection last did; a run opening it is such a time
                 }
             } catch (RuntimeException e) {
+                connections.noted(id, describe(e));
                 throw size == 1 ? e : new IllegalStateException(run.targets.get(i).connection() + ": " + describe(e));
             } catch (Exception e) {
+                connections.noted(id, describe(e));
                 throw new IllegalStateException(size == 1 ? describe(e) : run.targets.get(i).connection() + ": " + describe(e));
             }
         }

@@ -309,9 +309,17 @@ public class Reports {
             b.append(String.format(Locale.ROOT, "<line class=\"grid\" x1=\"%d\" x2=\"%d\" y1=\"%.1f\" y2=\"%.1f\"/><text class=\"axis\" x=\"%d\" y=\"%.1f\" text-anchor=\"end\">%s</text>",
                     left, w - right, y, y, left - 8, y + 4, esc(num(max * i / 4))));
         }
-        for (int i = 0; i <= 6; i++) {
-            double x = left + (w - left - right) * i / 6.0;
-            b.append(String.format(Locale.ROOT, "<text class=\"axis\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">%s</text>", x, h - 8, esc(clock(end * i / 6))));
+        // a label at whole seconds only, at most seven of them: a four-second run is not 0:01, 0:01, 0:03, 0:03
+        int step = 86400;
+        for (int s : new int[] {1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200}) {
+            if (end / s <= 6) {
+                step = s;
+                break;
+            }
+        }
+        for (int at = 0; at <= end; at += step) {
+            double x = left + (w - left - right) * at / (double) end;
+            b.append(String.format(Locale.ROOT, "<text class=\"axis\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">%s</text>", x, h - 8, esc(clock(at))));
         }
         String first = sent.substring(1, sent.indexOf(" ")), last = sent.substring(sent.lastIndexOf("L") < 0 ? 1 : sent.lastIndexOf("L") + 1, sent.lastIndexOf(" "));
         b.append("<path class=\"area\" d=\"").append(sent).append("L").append(last).append(' ').append(h - bottom).append("L").append(first).append(' ').append(h - bottom).append("Z\"/>");

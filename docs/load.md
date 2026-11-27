@@ -136,7 +136,7 @@ curl -X POST localhost:8585/api/runs -H 'content-type: application/json' \
   -d '{"raw":true,"body":"{{not a placeholder}}","headers":{"kind":"probe"},"connection":"dry-run","destination":"DEMO.QUEUE","count":1}'
 ```
 
-A raw run cannot verify arrivals: every copy is the same text.
+A raw run cannot verify arrivals: every copy is the same text. In the lists of runs, messages and reports its template is `raw`, whichever template was open when the text was typed.
 
 ## Watching other destinations
 
@@ -296,6 +296,8 @@ As it is saved in `msgforge.json` (`"scenarios": [ … ]`) and accepted by `POST
 ```
 
 `"match": "{{ref}}"` needs `{{ref=uuid}}` (or another binding named `ref`) in each template; leave `match` and the `ref` header out to match on the first `{{uuid}}` or `{{id}}` in the body and, for rejects, on the correlation id. `connection` is a connection's id. A send-only soak drops `expect`, `timeoutSeconds` and `match`, and may then set `"count": 0`. A run request (`POST /api/runs`) takes the same fields plus `label` and `raw`, and the single-template shorthand.
+
+Changed in 0.3: a value in `vars` that contains `{{` is rendered for each message (`"vars": {"total": "{{decimal 5 50 2}}"}` narrows a range). Up to 0.2 every override was used as it stood. A request that needs `{{` to arrive as text has to put it in the template or send the message raw.
 
 The whole file, with a monitor that is on all day and the scenario beside it:
 

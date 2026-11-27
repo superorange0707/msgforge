@@ -6,7 +6,7 @@ const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&g
 const KINDS = [['empty', 'Empty'], ['garbage', 'Garbage'], ['truncated', 'Truncated'], ['field-removed', 'Field missing'], ['type-changed', 'Wrong type']];
 const blankPlan = () => ({ mix: false, parts: [], extra: [], watches: [], kinds: KINDS.slice(0, 3).map(k => k[0]), unlimited: false, all: false, check: false });
 const state = {
-  about: {}, packs: [], types: [], connections: [], status: {}, scenarios: [], monitors: [], runs: [], messages: [], generators: [], saved: null,
+  about: {}, controls: new Set(), packs: [], types: [], connections: [], status: {}, scenarios: [], monitors: [], runs: [], messages: [], generators: [], saved: null,
   mode: 'send', page: 'envs', env: null,
   pack: null, name: null, text: '', rendered: '', vars: {},   // the workbench: a template, its text, the sample shown, the field controls
   send: { queue: '', headers: '', raw: false, check: false, arrive: '' },
@@ -91,6 +91,15 @@ function kv(text) {
   for (const part of text.split(',')) {
     const i = part.indexOf('=');
     if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+// One name=value a line: a value may hold commas, spaces and {{expressions}}.
+function kvLines(text) {
+  const out = {};
+  for (const line of text.split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0 && line.slice(0, i).trim()) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
   }
   return out;
 }
@@ -228,7 +237,7 @@ function fillEnvMenu() {
   menuItem(menu, 'Manage environments…', { click: () => go('settings', 'envs') });
 }
 function pickEnv(id) {
-  state.env = id; renderEnv(); remember(); checkEnv(id);
+  state.env = id; renderEnv(); remember();
   if (state.mode === 'settings') renderEnvCards();
 }
 async function loadConnections() {
@@ -279,12 +288,26 @@ async function pickTemplate(packId, name, vars) {
   renderTemplatePick(); renderFields(); remember();
   await preview();
 }
+// Overrides that have no control of their own are typed, one name=value a line, under More: any variable can be fixed.
+function syncVars() {
+  const text = Object.entries(state.vars).filter(([k]) => !state.controls.has(k)).map(([k, v]) => k + '=' + v).join('\n');
+  for (const id of ['sVars', 'lVars']) { $(id).value = text; $(id).rows = Math.min(6, Math.max(2, text.split('\n').length)); }
+  if (text) $('sMore').open = true;
+}
+function typedVars(e) {
+  const typed = kvLines(e.target.value);
+  for (const k of Object.keys(state.vars)) if (!state.controls.has(k)) delete state.vars[k];
+  Object.assign(state.vars, typed);
+  renderFields(); previewSoon();   // a name that has a control shows there from now on
+}
 function renderFields() {
   const box = $('fields'); box.replaceChildren();
   const fields = pack()?.fields || {};
+  state.controls = new Set();
   for (const [name, expr] of Object.entries(fields)) {
     const kind = fieldKind(expr);
     if (!kind || !usesField(state.text, name)) continue;
+    state.controls.add(name);
     const field = el('label', 'field'); field.append(el('span', '', human(name)));
     const set = () => { field.classList.toggle('set', name in state.vars); previewSoon(); };
     if (kind.kind === 'pick') {
@@ -312,6 +335,7 @@ function renderFields() {
     field.classList.toggle('set', name in state.vars);
     box.append(field);
   }
+  syncVars();
 }
 let previewTimer;
 const previewSoon = () => { clearTimeout(previewTimer); previewTimer = setTimeout(preview, 200); };
@@ -458,7 +482,7 @@ function renderPlan() {
   $('lCount').placeholder = plan.unlimited ? 'until stopped' : $('lDuration').value ? 'until time' : '';
   $('lDuration').placeholder = plan.unlimited ? 'until stopped' : '–';
   // the mix: several templates in weighted shares, each with the queue it should arrive on
-  $('mix').hidden = !plan.mix; $('lArriveBox').hidden = plan.mix; $('mixStart').hidden = plan.mix;
+  $('mix').hidden = !plan.mix; $('lArriveBox').hidden = plan.mix; $('lVarsBox').hidden = plan.mix; $('mixStart').hidden = plan.mix;
   $('mixRows').replaceChildren(...plan.parts.map((part, i) => {
     const row = el('div', 'mixrow'), weight = el('input', 'w'), to = el('input', 'to');
     weight.type = 'number'; weight.min = 1; weight.max = 1000; weight.value = part.weight; weight.setAttribute('aria-label', 'Weight'); weight.title = 'Weight: this template\'s share of the messages';
@@ -651,7 +675,9 @@ function rateChart(series) {
     const gy = (h - b - (h - t - b) * i / 4).toFixed(1);
     svg += `<line class="grid" x1="${l}" x2="${w - r}" y1="${gy}" y2="${gy}"/><text x="${l - 8}" y="${+gy + 4}" text-anchor="end">${rate(max * i / 4)}</text>`;
   }
-  for (let i = 0; i <= 6; i++) svg += `<text x="${(l + (w - l - r) * i / 6).toFixed(1)}" y="${h - 8}" text-anchor="middle">${clock(end * i / 6)}</text>`;
+  // a label at whole seconds only, at most seven of them: a four-second run is not 0:01, 0:01, 0:03, 0:03
+  const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200].find(s => end / s <= 6) || 86400;
+  for (let at = 0; at <= end; at += step) svg += `<text x="${x(at).toFixed(1)}" y="${h - 8}" text-anchor="middle">${clock(at)}</text>`;
   svg += `<path class="area" d="${sent}L${x1.toFixed(1)} ${h - b}L${x0.toFixed(1)} ${h - b}Z"/>`;
   if (anyTarget) svg += `<path class="target" d="${path(p => p.target || 0)}"/>`;
   svg += `<path class="sent" d="${sent}"/>`;
@@ -817,7 +843,7 @@ function renderRejects() {
   onoff.onclick = () => m.state === 'stopped' ? monitorAct(m, '/start', 'POST') : monitorAct(m, '', 'DELETE');
   head.append(el('span', 'sp'), el('span', 'hint', pretty(w.connection + ' / ' + w.destination)), state_, onoff);
   const parts = [head];
-  if (m.error) parts.push(el('div', 'error', m.error + (m.retryAt ? ' Next try at ' + time(m.retryAt) + '.' : '')));
+  if (m.error) parts.push(el('div', 'error', m.error + (m.retryAt ? (/[.!?]$/.test(m.error) ? '' : '.') + ' Next try at ' + time(m.retryAt) + '.' : '')));
   const kpis = el('div', 'kpis'), kpi = (value, unit, ...label) => { const k = el('div', 'card kpi'), b = el('b', '', value), s = el('span'); if (unit) b.append(el('small', '', unit)); s.append(...label); k.append(b, s); return k; };
   const reset = el('button', '', 'reset'); reset.type = 'button'; reset.setAttribute('aria-label', 'Reset the count'); reset.onclick = () => monitorAct(m, '/reset', 'POST');
   kpis.append(kpi(num(w.count), '', 'since ' + time(w.since) + ' · ', reset), kpi(rate(w.rate), '/s', 'last 10 s'), kpi(num(w.total), '', 'since it started'), kpi(w.lastAt ? time(w.lastAt) : '–', '', 'last arrival'));
@@ -1213,6 +1239,17 @@ function openPaste() {
   $('paste').value = ''; $('pasteName').value = ''; $('recog').replaceChildren(); $('found').textContent = ''; pasteTemplate = '';
   $('pasteDialog').showModal(); $('paste').focus();
 }
+// A file is a message like one pasted: its text goes in the box, and its name is the name offered.
+async function pasteFrom(file) {
+  if (!file) return;
+  if (file.size > 1024 * 1024) return toast(file.name + ' is larger than 1 MB.', true);
+  const text = await file.text();
+  if (text.includes('\u0000') || text.includes('\ufffd')) return toast(file.name + ' is not text.', true);
+  $('paste').value = text;
+  const name = file.name.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '');
+  if (name) $('pasteName').value = name;
+  recognisePaste();
+}
 async function recognisePaste() {
   const text = $('paste').value, packId = $('pastePack').value, asked = ++pasteAsked, found = $('found');
   if (!text.trim()) { $('recog').replaceChildren(); found.textContent = ''; pasteTemplate = ''; return; }
@@ -1246,6 +1283,12 @@ async function refresh() {
   try {
     const [runs, messages] = await Promise.all([api('/runs'), api('/messages')]);
     state.runs = runs; state.messages = messages;
+    // A run opening its connection is how the console learns how the environment is doing, besides Test: nothing checks by itself.
+    const busy = runs.length + ':' + runs.filter(going).length + ':' + (runs[0]?.id || '');
+    if (busy !== state.busy) {
+      state.busy = busy;
+      api('/connections/status').then(s => { state.status = s; renderEnv(); if (state.mode === 'settings') renderEnvCards(); }, () => {});
+    }
     // a single send that failed says why, once
     const mine = runs.find(r => r.id === state.sentRun);
     if (mine && !going(mine)) { state.sentRun = null; if (mine.status === 'FAILED') toast(mine.error, true); }
@@ -1323,6 +1366,15 @@ $('monitorForm').addEventListener('submit', startMonitor);
 $('mSave').onclick = () => toggle($('mSave'), !isOn($('mSave')));
 $('paste').addEventListener('input', () => { clearTimeout(pasteTimer); pasteTimer = setTimeout(recognisePaste, 250); });
 $('pastePack').onchange = recognisePaste;
+$('pasteOpen').onclick = () => $('pasteFile').click();
+$('pasteFile').onchange = () => { pasteFrom($('pasteFile').files[0]); $('pasteFile').value = ''; };
+{
+  const drop = $('pasteDialog').querySelector('.dsplit');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); pasteFrom(e.dataTransfer.files[0]); });
+}
+$('sVars').onchange = typedVars; $('lVars').onchange = typedVars;
 $('pasteForm').addEventListener('submit', savePaste);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeMenu(true);
@@ -1359,7 +1411,6 @@ window.addEventListener('beforeunload', e => { if (dirty()) e.preventDefault(); 
   renderTemplatePick(); renderPlan();
   go(['send', 'load', 'rejects', 'reports'].includes(kept.mode) ? kept.mode : 'send');
   await refresh(); loadMonitors().catch(() => {}); setInterval(tick, 1000);
-  if (state.env && (!state.status[state.env] || Date.now() - new Date(state.status[state.env].at) > 60000)) checkEnv(state.env);
   const linked = /^#run=([0-9a-f]{8})$/.exec(location.hash);   // a link to one run opens it
   if (linked) openRun(linked[1]);
 })();

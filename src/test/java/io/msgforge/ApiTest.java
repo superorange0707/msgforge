@@ -557,6 +557,12 @@ class ApiTest {
         lastRun();
         mvc.perform(get("/api/messages/" + raw + "/1/0")).andExpect(jsonPath("$.body").value("{{uuid}} as typed")).andExpect(jsonPath("$.headers.h").value("{{seq}}"))
                 .andExpect(jsonPath("$.template").value("raw"));
+        // as the console sends it, with the template that was open: still listed as raw, it is not that template's text
+        String typed = sent(post("/api/runs"), "{\"raw\":true,\"pack\":\"demo\",\"template\":\"order.json\",\"body\":\"typed\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":1}").get("id").asText();
+        assertEquals("[\"raw\"]", lastRun().get("templates").toString());
+        mvc.perform(get("/api/messages/" + typed + "/1/0")).andExpect(jsonPath("$.template").value("raw"));
+        // a run opening its connection is noted as that connection's state, like a check
+        mvc.perform(get("/api/connections/status")).andExpect(jsonPath("$.dry-run.ok").value(true));
     }
 
     @Test
