@@ -734,7 +734,7 @@ public class Runs {
             // a connection's own var is filled in here, so the run, its report and its watches name the queue the environment has
             String written = connections.expand(t.connection(), t.destination().trim());
             targets.add(new TargetView(t.connection(), connections.get(t.connection()).name(), written));
-            destinations.add(connections.resolve(written));
+            destinations.add(connections.resolve(t.connection(), written));   // by connection, so a var it lacks is named as such
         }
 
         Map<String, String> headers = req.headers() == null ? Map.of() : Map.copyOf(req.headers());
@@ -800,7 +800,7 @@ public class Runs {
         List<Observer> observers = new ArrayList<>();
         List<String> watchDestinations = new ArrayList<>();
         for (TargetView w : watches) {
-            watchDestinations.add(connections.resolve(w.destination()));
+            watchDestinations.add(connections.resolve(w.connectionId(), w.destination()));
             observers.add(new Observer(w.connection(), w.destination(), buckets.get(w)));
         }
 

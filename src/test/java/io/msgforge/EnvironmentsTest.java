@@ -160,6 +160,15 @@ class EnvironmentsTest {
         assertEquals("UAT / UAT.IN", run.checks().get(0).expected());
         assertEquals("UAT.IN", run.targets().get(0).destination());
         assertEquals(3, run.watched().get(0).count());
+
+        // a queue the environment has no var for is named as such, for a target and for a watch alike
+        for (Runs.Request missing : List.of(
+                new Runs.Request(null, null, null, null, 1, 0, null, "demo", "order.json", null, null, "uat", "${Credit}", null, null, null, null, null, null, null, null),
+                new Runs.Request(null, null, null, null, 1, 0, null, "demo", "order.json", null, null, "uat", "${Input}", null, null, null, null, null, null,
+                        List.of(new Runs.Watch("uat", "${Credit}", null)), null))) {
+            String refused = assertThrows(IllegalArgumentException.class, () -> runs.start(missing)).getMessage();
+            assertTrue(refused.startsWith("UAT has no var named Credit; its vars are Input."), refused);
+        }
     }
 
     @Test
