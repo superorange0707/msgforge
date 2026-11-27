@@ -521,6 +521,15 @@ class ApiTest {
         assertEquals(invalid.get("sent").asInt(), invalid.get("accepted").asInt());
         assertEquals(run.get("checks").get(0).get("sent").asInt(), run.get("checks").get(0).get("arrived").asInt());
 
+        // without the header nothing says which message an emptied one was: still not a pass
+        sent(post("/api/runs"), """
+                {"pack":"demo","template":"order.json","connection":"dry-run","destination":"V.IN","count":40,"expect":{"connection":"dry-run","destination":"V.IN"},
+                 "timeoutSeconds":1,"invalid":{"percent":50,"kinds":["empty","garbage"]},"seed":1}""");
+        JsonNode blind = lastRun();
+        assertEquals("FAIL", blind.get("verdict").asText());
+        assertEquals(blind.get("checks").get(1).get("sent").asInt(), blind.get("checks").get(1).get("unrecognised").asInt());
+        assertEquals(0, blind.get("checks").get(1).get("arrived").asInt());
+
         String run1 = "{\"pack\":\"demo\",\"template\":\"order.json\",\"connection\":\"dry-run\",\"destination\":\"Q\",\"count\":%s%s}";
         String[][] refused = {
                 {"0", "", "needs a duration"},

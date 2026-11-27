@@ -98,11 +98,14 @@ Each part that verifies gets a second check for its invalid messages (`"invalid"
 |---|---|---|
 | `arrived` | on the part's expected destination | rejected as expected: on the invalid destination, or nowhere when none is named |
 | `accepted` | | accepted although invalid: they arrived where the valid ones go |
+| `unrecognised` | | accepted, unrecognisable: see below |
 | `rejected` | valid but rejected: they arrived where the invalid ones go | |
 | `misrouted` | on another watched destination | on another watched destination |
 | `missing` | nowhere | nowhere, when a destination was named |
 
 The verdict is `PASS` when in every check `arrived` equals `sent` and no send failed.
+
+"Nowhere" can only be said of a message that would have been recognised had it arrived. An emptied, replaced or cut-off message that went out with its token in no header has nothing left to know it by, and a system that lets it through delivers something nobody can place. So a run whose invalid messages are expected nowhere counts the arrivals it cannot place on the destinations where its valid messages are expected, and for each of them one such invalid message is not credited as rejected: it is reported as `unrecognised` ("accepted, unrecognisable") and the check fails. A run cannot tell these from somebody else's traffic, so it also fails when other senders use that destination during the run; name a destination for the invalid messages (`invalid.expect`), put the token in a header, or keep the destination to the run. A second copy of a message that has already arrived is not counted.
 
 ### How an arrival is recognised
 

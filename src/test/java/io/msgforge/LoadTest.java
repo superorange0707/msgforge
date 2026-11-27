@@ -447,6 +447,27 @@ class LoadTest {
             Runs.View run = finished(runs, runs.start(ordersRun(100, new Faults.Spec(25, null, null), 1, null)).id());
             assertEquals("FAIL", run.verdict());
             assertEquals(run.checks().get(1).sent(), run.checks().get(1).accepted());
+
+            // (the token in the body only, this time: no header carries it along)
+            Runs.Request bare = new Runs.Request("orders", List.of(new Runs.Part("demo", "order.json", ORDER, 1, null, OUT)), List.of(IN), null, 100, 0,
+                    null, null, null, null, null, null, null, null, 1, "{{ref}}", null, new Faults.Spec(25, List.of("empty", "garbage", "truncated"), null), 11L, null, null);
+            // Emptied, replaced or cut short, a message has nothing left to know it by. Let through, each is an arrival
+            // nobody can place where the valid ones go, and as many invalid messages are not said to have stayed away.
+            Runs.View blind = finished(runs, runs.start(bare).id());
+            assertEquals("FAIL", blind.verdict(), blind.checks().toString());
+            Runs.Check lost = blind.checks().get(1);
+            assertTrue(lost.unrecognised() > 5, lost.toString());
+            assertEquals(lost.sent(), lost.arrived() + lost.accepted() + lost.unrecognised(), lost.toString());
+            assertEquals(0, lost.arrived(), "none is credited as rejected: " + lost);
+            assertEquals(blind.checks().get(0).sent(), blind.checks().get(0).arrived());
+        }
+        // the same messages, kept out: nothing unknown arrives, and they are rejected as expected
+        try (TransportType.Subscription sut = orders(dry, json, valid -> valid ? "ORDERS.OUT" : null)) {
+            Runs.Request bare = new Runs.Request("orders", List.of(new Runs.Part("demo", "order.json", ORDER, 1, null, OUT)), List.of(IN), null, 100, 0,
+                    null, null, null, null, null, null, null, null, 1, "{{ref}}", null, new Faults.Spec(25, List.of("empty", "garbage", "truncated"), null), 11L, null, null);
+            Runs.View kept = finished(runs, runs.start(bare).id());
+            assertEquals("PASS", kept.verdict(), kept.checks().toString());
+            assertEquals(0, kept.checks().get(1).unrecognised());
         }
 
         // a kind this template cannot be given is refused before the run starts

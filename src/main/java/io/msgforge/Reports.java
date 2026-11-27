@@ -214,9 +214,9 @@ public class Reports {
         }
         if (!r.checks().isEmpty()) {
             out.append("\r\n");
-            row(out, "check", "messages", "expected", "sent", "arrived", "misrouted", "missing", "rejected", "accepted", "median_ms", "max_ms");
+            row(out, "check", "messages", "expected", "sent", "arrived", "misrouted", "missing", "rejected", "accepted", "unrecognised", "median_ms", "max_ms");
             for (Runs.Check c : r.checks()) {
-                row(out, c.template(), c.invalid() ? "invalid" : "valid", c.expected(), c.sent(), c.arrived(), c.misrouted(), c.missing(), c.rejected(), c.accepted(), c.medianMs(), c.maxMs());
+                row(out, c.template(), c.invalid() ? "invalid" : "valid", c.expected(), c.sent(), c.arrived(), c.misrouted(), c.missing(), c.rejected(), c.accepted(), c.unrecognised(), c.medianMs(), c.maxMs());
             }
         }
         if (!r.errors().isEmpty()) {
@@ -387,6 +387,7 @@ public class Reports {
             List<List<Object>> rows = new ArrayList<>();
             for (Runs.Check c : r.checks()) {
                 String result = c.invalid() ? c.arrived() + " rejected as expected" + (c.accepted() > 0 ? ", " + c.accepted() + " accepted although invalid" : "")
+                        + (c.unrecognised() > 0 ? ", " + c.unrecognised() + " accepted, unrecognisable" : "")
                         : c.arrived() + " arrived" + (c.rejected() > 0 ? ", " + c.rejected() + " valid but rejected" : "");
                 if (c.misrouted() > 0) result += ", " + c.misrouted() + " misrouted";
                 if (c.missing() > 0) result += ", " + c.missing() + " missing";

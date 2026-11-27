@@ -561,6 +561,7 @@ function flowOf(r) {
     ['rejected as expected', 'c-accent', sum(c => c.invalid ? c.arrived : 0)],
     ['valid but rejected', 'c-bad', sum(c => c.rejected)],
     ['accepted although invalid', 'c-bad', sum(c => c.accepted)],
+    ['accepted, unrecognisable', 'c-bad', sum(c => c.unrecognised || 0)],
     ['misrouted', 'c-warn', sum(c => c.misrouted)],
     ['missing', 'c-none', sum(c => c.missing)],
   ];
@@ -724,6 +725,7 @@ function renderRunDetail(d) {
     const result = el('td', !ended ? '' : c.arrived === c.sent ? 'ok' : 'bad');
     result.append(num(c.arrived) + (c.invalid ? ' rejected as expected' : ' arrived'));
     if (c.accepted) result.append(', ' + c.accepted + ' accepted although invalid');
+    if (c.unrecognised) result.append(', ' + c.unrecognised + ' accepted, unrecognisable');
     if (c.rejected) result.append(', ' + c.rejected + ' valid but rejected');
     if (ended && c.misrouted) result.append(', ' + c.misrouted + ' misrouted');
     if (ended && c.missing) result.append(', ' + c.missing + ' missing');

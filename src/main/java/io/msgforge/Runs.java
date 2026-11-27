@@ -122,9 +122,18 @@ public class Runs {
      * where the run says invalid messages go, or nowhere; arrived then counts the ones rejected as expected, and
      * accepted the ones that turned up where the valid messages go. On a valid check, rejected counts the valid
      * messages that turned up where the invalid ones go. Neither is counted under misrouted as well.
+     *
+     * unrecognised is for invalid messages expected nowhere that went out with nothing left to know them by (emptied,
+     * replaced, cut before their token): the number of them that cannot be said to have stayed away, because that many
+     * arrivals nobody could identify turned up where this run's valid messages go. They are not counted as arrived.
      */
     public record Check(String template, String expected, int sent, int arrived, int misrouted, int missing, Long medianMs, Long maxMs,
-                        boolean invalid, int rejected, int accepted) {
+                        boolean invalid, int rejected, int accepted, int unrecognised) {
+
+        public Check(String template, String expected, int sent, int arrived, int misrouted, int missing, Long medianMs, Long maxMs,
+                     boolean invalid, int rejected, int accepted) {
+            this(template, expected, sent, arrived, misrouted, missing, medianMs, maxMs, invalid, rejected, accepted, 0);
+        }
 
         /** A check of valid messages in a run without invalid ones. */
         public Check(String template, String expected, int sent, int arrived, int misrouted, int missing, Long medianMs, Long maxMs) {
@@ -202,16 +211,18 @@ public class Runs {
         final int part, expected;   // expected: the watch it should arrive on, -1 for nowhere
         final long n;
         final boolean invalid;
+        final boolean lost;         // it went out without its token: where it arrives, nothing says it is this one
         final long sentAt = System.nanoTime();
         int watch = -1;   // where it arrived
         long latency;
 
-        Awaited(String token, int part, long n, boolean invalid, int expected) {
+        Awaited(String token, int part, long n, boolean invalid, int expected, boolean lost) {
             this.token = token;
             this.part = part;
             this.n = n;
             this.invalid = invalid;
             this.expected = expected;
+            this.lost = lost;
         }
     }
 
@@ -265,6 +276,10 @@ public class Runs {
                 return size() > KEPT_STRAYS;
             }
         };
+        // Arrivals per watch that are no message of this run, as far as anything on them says. Counted only in a run that
+        // may need them: one whose invalid messages are expected nowhere. Guarded by awaited.
+        final int[] unknown;
+        final boolean blind;
         int outstanding, nowhere;               // awaited messages not yet arrived that are expected somewhere, and the number expected nowhere
         // Guarded by gate: the making of messages. One sender at a time takes the next message, in order, when it is due.
         final Object gate = new Object();
@@ -310,6 +325,8 @@ public class Runs {
             this.verifying = verifying;
             this.faultPercent = faultPercent;
             this.faultKinds = faultKinds;
+            this.blind = verifying && faultKinds != null && invalidWatch < 0;
+            this.unknown = new int[watches.size()];
             this.seed = seed;
             this.random = new SplittableRandom(seed);
             this.match = match;
@@ -392,7 +409,9 @@ public class Runs {
             Awaited a = null;
             if (message.token() != null && (fault == null ? part.watch() >= 0 : verifying)) {
                 // Awaited before it is sent: the arrival can beat the return of send().
-                a = new Awaited(message.token(), pick, n, fault != null, fault == null ? part.watch() : invalidWatch);
+                boolean lost = fault != null && !body.contains(message.token())
+                        && message.headers().values().stream().noneMatch(v -> v != null && v.contains(message.token()));
+                a = new Awaited(message.token(), pick, n, fault != null, fault == null ? part.watch() : invalidWatch, lost);
                 synchronized (awaited) {
                     // Two awaited messages with one token could not be told apart when one of them arrives.
                     if (pending.putIfAbsent(a.token, a) != null) {
@@ -413,6 +432,7 @@ public class Runs {
                 byId.put(messageId, a);
                 Stray early = strays.remove(messageId);
                 if (early != null && a.watch < 0 && pending.get(a.token) == a) {
+                    if (blind && unknown[early.watch] > 0) unknown[early.watch]--;   // it was somebody's after all
                     settle(a, early.watch, System.nanoTime());
                     if (early.delivery != null) early.delivery.claim(id, a.n, outcome(a, early.watch));   // the lists of arrivals learn which message it was
                 }
@@ -456,10 +476,25 @@ public class Runs {
                 for (Awaited a : pending.values()) {
                     if ((found == null || a.token.length() > found.token.length()) && carries(arrival, a.token)) found = a;
                 }
+                boolean copy = false;
                 if (found == null && correlation != null && verifying) {
                     found = byId.get(correlation);
-                    if (found != null && pending.get(found.token) != found) found = null;   // it has arrived already
-                    else if (found == null) strays.put(correlation, new Stray(watch, delivery));
+                    if (found != null && pending.get(found.token) != found) {   // it has arrived already
+                        found = null;
+                        copy = true;
+                    } else if (found == null) strays.put(correlation, new Stray(watch, delivery));
+                }
+                if (found == null && blind && !copy) {
+                    // ponytail: a look through every message sent, per arrival that is not recognised at once, and only in
+                    // a run that sends invalid messages it expects nowhere. A second copy of a message that has arrived
+                    // must not pass for an invalid one that got through.
+                    for (Awaited a : awaited) {
+                        if (a.watch >= 0 && carries(arrival, a.token)) {
+                            copy = true;
+                            break;
+                        }
+                    }
+                    if (!copy) unknown[watch]++;
                 }
                 if (found != null) {
                     settle(found, watch, now);
@@ -498,17 +533,29 @@ public class Runs {
         List<Check> checks() {
             List<Check> out = new ArrayList<>();
             synchronized (awaited) {
+                // What arrived unrecognised where valid messages are expected: each may be an invalid message that was let
+                // through with nothing left to know it by. One arrival answers for one message, whichever part sent it.
+                int unclaimed = 0;
+                boolean[] counted = new boolean[watches.size()];
+                for (Loaded part : parts) {
+                    if (part.watch() >= 0 && !counted[part.watch()]) {
+                        counted[part.watch()] = true;
+                        unclaimed += unknown[part.watch()];
+                    }
+                }
                 for (int p = 0; p < parts.size(); p++) {
                     for (boolean invalid : new boolean[] {false, true}) {
                         int own = parts.get(p).watch(), expected = invalid ? invalidWatch : own;
-                        int sent = 0, arrived = 0, misrouted = 0, missing = 0, rejected = 0, accepted = 0;
+                        int sent = 0, arrived = 0, misrouted = 0, missing = 0, rejected = 0, accepted = 0, lost = 0;
                         List<Long> latencies = new ArrayList<>();
                         for (Awaited a : awaited) {
                             if (a.part != p || a.invalid != invalid) continue;
                             sent++;
                             if (a.watch < 0) {
-                                if (expected < 0) arrived++;   // expected nowhere, and it stayed away
-                                else missing++;
+                                if (expected < 0) {   // expected nowhere, and it stayed away, or could not have been seen arriving
+                                    arrived++;
+                                    if (a.lost) lost++;
+                                } else missing++;
                             } else if (a.watch == expected) {
                                 arrived++;
                                 latencies.add(a.latency / 1_000_000);
@@ -519,11 +566,17 @@ public class Runs {
                         // No check for what was not sent or is not expected anywhere: "0 sent, 0 arrived" judges nothing. (A run whose
                         // messages all came out invalid has no valid ones to check, and a part without an expectation none at all.)
                         if (sent == 0 || !invalid && own < 0) continue;
+                        // "It did not arrive" is only known of a message that could have been recognised. Of the ones that
+                        // could not, as many as there were arrivals nobody can place are not credited: the run cannot tell
+                        // them apart, and a result that cannot be told from a failure is not a pass.
+                        int unrecognised = Math.min(lost, unclaimed);
+                        unclaimed -= unrecognised;
+                        arrived -= unrecognised;
                         Collections.sort(latencies);
                         int n = latencies.size();
                         String where = expected < 0 ? "nowhere" : watches.get(expected).connection() + " / " + watches.get(expected).destination();
                         out.add(new Check(parts.get(p).template(), where, sent, arrived, misrouted, missing,
-                                n == 0 ? null : latencies.get(n / 2), n == 0 ? null : latencies.get(n - 1), invalid, rejected, accepted));
+                                n == 0 ? null : latencies.get(n / 2), n == 0 ? null : latencies.get(n - 1), invalid, rejected, accepted, unrecognised));
                     }
                 }
             }

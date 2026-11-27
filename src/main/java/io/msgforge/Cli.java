@@ -237,6 +237,7 @@ final class Cli {
         boolean invalid = c.path("invalid").asBoolean();
         return "sent " + c.path("sent").asInt() + (invalid ? ", rejected as expected " : ", arrived ") + c.path("arrived").asInt()
                 + (c.path("accepted").asInt() > 0 ? ", accepted although invalid " + c.path("accepted").asInt() : "")
+                + (c.path("unrecognised").asInt() > 0 ? ", accepted, unrecognisable " + c.path("unrecognised").asInt() : "")
                 + (c.path("rejected").asInt() > 0 ? ", valid but rejected " + c.path("rejected").asInt() : "")
                 + ", misrouted " + c.path("misrouted").asInt() + ", missing " + c.path("missing").asInt()
                 + (c.path("medianMs").isNull() ? "" : ", median " + c.path("medianMs").asLong() + " ms, max " + c.path("maxMs").asLong() + " ms");
