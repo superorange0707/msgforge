@@ -13,275 +13,271 @@
 })();
 </script>
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="theme.css">
 </head>
 <body>
 <div class="app">
-  <nav class="side">
+  <header class="top">
     <div class="brand">
-      <span class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 4 14h6.5L9 22l10-12.5h-6.5z"/></svg></span>
-      <span>msg<b>forge</b></span>
+      <span class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13.5h6L9.5 22 19 10h-6z"/></svg></span>
+      <span id="brand">msg<b>forge</b></span>
     </div>
-    <label class="search" data-icon="search"><input id="filter" placeholder="Filter templates" autocomplete="off" aria-label="Filter templates"></label>
-    <div class="tree">
-      <div class="pack"><span>Scenarios</span><div class="acts"><button id="newScenario" data-icon="plus" title="New scenario" aria-label="New scenario"></button></div></div>
-      <div id="scenarios"></div>
-      <div class="pack"><span>Monitors</span><div class="acts"><button id="newMonitor" data-icon="plus" title="Watch a destination" aria-label="New monitor"></button></div></div>
-      <div id="monitors"></div>
-      <div id="packs"></div>
-      <button class="newpack" id="newPack" data-icon="plus">New pack</button>
+    <nav class="modes" aria-label="Mode">
+      <button data-mode="send" data-icon="send">Send</button>
+      <button data-mode="load" data-icon="gauge">Load</button>
+      <button data-mode="rejects" data-icon="inbox">Rejects <span class="count" id="rejectCount" hidden></span></button>
+      <button data-mode="reports" data-icon="chart">Reports</button>
+    </nav>
+    <div class="right">
+      <div class="anchor">
+        <button class="env" id="env" aria-haspopup="true" aria-expanded="false" aria-controls="envMenu" title="Environment"><i class="dot"></i><span id="envName"></span></button>
+        <div class="menu r" id="envMenu" hidden></div>
+      </div>
+      <button class="iconbtn" id="theme" title="Switch theme" aria-label="Switch theme"></button>
+      <button class="iconbtn" id="gear" data-icon="cog" title="Settings" aria-label="Settings"></button>
     </div>
-    <div class="foot"><span>v0.2.0</span><span class="grow"></span>
-      <button class="iconbtn" id="reports" data-icon="archive" title="Saved reports" aria-label="Saved reports"></button>
-      <button class="iconbtn" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
-  </nav>
+  </header>
 
-  <main class="work">
-    <section class="card paned ink">
-      <div class="head">
-        <div class="file" id="file"></div>
-        <span class="grow"></span>
-        <button class="btn ghost" id="raw" aria-pressed="false" title="Send the text exactly as typed: placeholders are not filled in">Raw</button>
-        <button class="btn ghost" id="insert" data-icon="braces" aria-haspopup="true" aria-expanded="false">Insert</button>
-        <button class="iconbtn" id="recognise" data-icon="wand" title="Find the values that should differ per message" aria-label="Find the values that should differ per message"></button>
-        <button class="iconbtn" id="deleteTemplate" data-icon="trash" title="Delete template" aria-label="Delete template"></button>
-        <button class="btn" id="save" disabled>Save <kbd>⌘S</kbd></button>
-      </div>
-      <div class="editor">
-        <div class="gutter" id="gutter" aria-hidden="true"></div>
-        <div class="stack">
-          <pre class="code" id="hl" aria-hidden="true"></pre>
-          <textarea class="code" id="src" spellcheck="false" wrap="off" aria-label="Template source. Tab indents; press Escape, then Tab, to leave the editor."></textarea>
+  <!-- Send and Load share the workbench: the message in the middle, what to do with it on the right -->
+  <main class="main view" id="bench">
+    <section class="col">
+      <div class="card msg ink">
+        <div class="msghead">
+          <div class="anchor">
+            <button class="pick" id="tpl" aria-haspopup="true" aria-expanded="false" aria-controls="tplMenu" title="Template"></button>
+            <div class="menu" id="tplMenu" hidden></div>
+          </div>
+          <div class="fields" id="fields"></div>
+          <span class="sp"></span>
+          <button class="ghost" id="reroll" data-icon="refresh" title="Another sample" aria-label="Another sample"></button>
+          <button class="ghost" id="editTpl" data-icon="edit">Edit</button>
         </div>
+        <div class="code" id="code" tabindex="0" aria-label="The message as it will be sent"></div>
+        <textarea class="rawtext" id="rawText" spellcheck="false" wrap="off" hidden aria-label="The message, sent exactly as typed"></textarea>
       </div>
+      <div class="card live" id="live" hidden></div>
     </section>
 
-    <section class="card paned ink">
-      <div class="head">
-        <div class="seg" role="tablist">
-          <button id="tabPreview" class="on" role="tab" aria-selected="true">Preview</button>
-          <button id="tabSent" role="tab" aria-selected="false">Sent <em id="sentCount"></em></button>
+    <aside class="card panel">
+      <form id="sendForm" class="pane">
+        <label class="inp"><span>Queue</span><input id="sQueue" list="queues" required autocomplete="off"></label>
+        <label class="inp"><span>Headers</span><input id="sHeaders" placeholder="name=value" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" class="switch" id="sRaw" role="switch" aria-checked="false"><i class="t"></i>Raw</button>
+          <button type="button" class="switch" id="sCheck" role="switch" aria-checked="false"><i class="t"></i>Check arrival</button>
         </div>
-        <span class="grow"></span>
-        <button class="iconbtn" id="copy" data-icon="copy" title="Copy" aria-label="Copy"></button>
-        <button class="iconbtn" id="reroll" data-icon="refresh" title="Generate another sample" aria-label="Generate another sample"></button>
-      </div>
-      <pre class="code out" id="preview"></pre>
-      <div class="sent" id="sent" hidden>
-        <div class="list" id="sentList"></div>
-        <pre class="code out" id="sentBody"></pre>
-      </div>
-    </section>
+        <label class="inp" id="sArriveBox" hidden><span>Arrives on</span><input id="sArrive" list="queues" autocomplete="off"></label>
+        <div class="act"><button class="go" data-icon="send">Send</button></div>
+        <div id="recentBox" hidden>
+          <h4>Recent</h4>
+          <div class="list" id="recent"></div>
+        </div>
+      </form>
+
+      <form id="loadForm" class="pane" hidden>
+        <div class="presets" id="presets" role="group" aria-label="Presets"></div>
+        <label class="inp"><span>Queue</span><input id="lQueue" list="queues" required autocomplete="off"></label>
+        <div class="mix" id="mix" hidden>
+          <div class="row"><h4>Mix</h4><span class="hint">expected on</span></div>
+          <div id="mixRows"></div>
+          <button type="button" class="add" id="mixAdd">+ Template</button>
+        </div>
+        <div class="grid2">
+          <label class="inp"><span>Per second</span><input id="lRate" type="number" min="0" step="any" placeholder="no limit"></label>
+          <label class="inp"><span>Messages</span><input id="lCount" type="number" min="0" max="1000000000" placeholder="until time"></label>
+          <label class="inp"><span>Duration (s)</span><input id="lDuration" type="number" min="0" max="604800" placeholder="–"></label>
+          <label class="inp"><span>Ramp-up (s)</span><input id="lRamp" type="number" min="0" max="86400" placeholder="0"></label>
+          <label class="inp"><span>Senders</span><input id="lSenders" type="number" min="1" max="64" placeholder="auto"></label>
+          <label class="inp"><span>Seed</span><input id="lSeed" type="number" min="0" step="1" placeholder="random"></label>
+        </div>
+        <div class="invalid">
+          <div class="row"><h4><label for="lInvalid">Invalid</label></h4><output id="lInvalidOut" for="lInvalid">0%</output></div>
+          <input class="range" id="lInvalid" type="range" min="0" max="100" step="1" value="0">
+          <div class="chips" id="lKinds" role="group" aria-label="Kinds of invalid message"></div>
+        </div>
+        <div class="row">
+          <button type="button" class="switch" id="lCheck" role="switch" aria-checked="false"><i class="t"></i>Check rejects</button>
+          <button type="button" class="ghost" id="savePreset">Save as preset</button>
+        </div>
+        <label class="inp" id="lRejectBox" hidden><span>Rejects arrive on</span><input id="lReject" list="queues" autocomplete="off"></label>
+        <details class="more" id="more">
+          <summary>More</summary>
+          <div class="morebody">
+            <label class="inp" id="lArriveBox"><span>Valid arrive on</span><input id="lArrive" list="queues" autocomplete="off" placeholder="not checked"></label>
+            <div class="grid2">
+              <label class="inp"><span>Timeout (s)</span><input id="lTimeout" type="number" min="1" max="600" placeholder="10"></label>
+              <label class="inp"><span>Match</span><input id="lMatch" autocomplete="off" placeholder="{{uuid}}"></label>
+            </div>
+            <label class="inp"><span>Headers</span><input id="lHeaders" placeholder="name=value" autocomplete="off"></label>
+            <div class="row">
+              <button type="button" class="switch" id="lUnlimited" role="switch" aria-checked="false"><i class="t"></i>Until stopped</button>
+              <button type="button" class="ghost" id="mixStart">Mix templates</button>
+            </div>
+            <div class="sub">
+              <div class="row"><h4>Also send to</h4><button type="button" class="switch" id="lAll" role="switch" aria-checked="false" title="Every message goes to every queue, not to each in turn"><i class="t"></i>Copy to all</button></div>
+              <div id="lTargets"></div>
+              <button type="button" class="add" id="lTargetAdd">+ Queue</button>
+            </div>
+            <div class="sub">
+              <div class="row"><h4>Watch</h4></div>
+              <div id="lWatches"></div>
+              <button type="button" class="add" id="lWatchAdd">+ Queue</button>
+            </div>
+          </div>
+        </details>
+        <div class="act two"><button class="go" id="start" data-icon="play">Start</button><button type="button" class="go stop" id="stop" data-icon="square" aria-label="Stop the run" title="Stop the run" disabled></button></div>
+      </form>
+    </aside>
   </main>
 
-  <aside class="launch">
-    <form class="card send-card" id="form">
-      <div id="targets"></div>
-      <div class="seg" id="mode" hidden>
-        <button type="button" data-mode="spread" title="Each message goes to the next target in turn">Spread</button>
-        <button type="button" data-mode="all" title="Every message goes to every target">Copy to all</button>
-      </div>
-      <div class="tools">
-        <button type="button" class="btn ghost" id="addTarget" data-icon="plus">Target</button>
-        <button type="button" class="btn ghost" id="verify" data-icon="check" aria-pressed="false" aria-controls="expect" title="Check where the messages arrive">Verify</button>
-        <button type="button" class="btn ghost" id="loadToggle" data-icon="gauge" aria-pressed="false" aria-controls="load" title="Ramp-up, duration, senders, seed">Load</button>
-        <button type="button" class="btn ghost" id="invalidToggle" data-icon="alert" aria-pressed="false" aria-controls="invalid" title="Make a share of the messages invalid on purpose">Invalid</button>
-        <span class="grow"></span>
-        <button type="button" class="btn ghost" id="manage" data-icon="sliders" title="Connections" aria-label="Connections"></button>
-      </div>
-      <div id="expect" hidden></div>
-      <div class="two">
-        <label class="field"><span>Messages</span><input id="count" type="number" min="0" max="1000000000" value="10" required></label>
-        <label class="field"><span>Per second</span><input id="rate" type="number" min="0" step="any" value="5" title="0 sends as fast as possible"></label>
-      </div>
-      <div id="load" hidden>
-        <div class="three">
-          <label class="field"><span>Ramp-up (s)</span><input id="rampUp" type="number" min="0" max="86400" placeholder="0"></label>
-          <label class="field"><span>Duration (s)</span><input id="duration" type="number" min="0" max="604800" placeholder="none"></label>
-          <label class="field"><span>Senders</span><input id="senders" type="number" min="0" max="64" placeholder="1" title="0 adds senders while the run falls behind its rate"></label>
-        </div>
-        <div class="pair">
-          <label class="field grow"><span>Seed</span><input id="seed" type="number" min="0" step="1" placeholder="random" title="The same seed repeats the same messages and faults"></label>
-          <button type="button" class="btn hold" id="unlimited" aria-pressed="false" title="No count and no duration: the run goes on until it is cancelled">Until stopped</button>
-        </div>
-      </div>
-      <div id="invalid" hidden>
-        <label class="field slide"><span>Invalid <output id="invalidOut" for="invalidPercent">5%</output></span><input id="invalidPercent" type="range" min="0" max="100" step="1" value="5"></label>
-        <div class="kinds" id="invalidKinds" role="group" aria-label="Kinds of invalid message"></div>
-        <div id="invalidExpect" hidden></div>
-      </div>
-      <label class="field"><span>Overrides</span><input id="vars" placeholder="currency=EUR" autocomplete="off"></label>
-      <label class="field"><span>Headers</span><input id="headers" placeholder="JMSCorrelationID={{uuid}}" autocomplete="off"></label>
-      <div class="pair">
-        <button class="send grow" data-icon="send">Send<kbd>⌘↵</kbd></button>
-        <button type="button" class="sq" id="saveScenario" data-icon="bookmark" title="Save as scenario" aria-label="Save as scenario"></button>
-      </div>
-    </form>
+  <main class="view page" id="rejects"></main>
+  <main class="view page" id="reports"></main>
 
-    <section class="card live ink" aria-label="Throughput">
-      <div class="nums">
-        <div><b id="total">0</b><span>messages sent</span></div>
-        <div class="r"><b id="liveRate">0</b><span>per second</span></div>
-      </div>
-      <svg viewBox="0 0 300 58" preserveAspectRatio="none" aria-hidden="true">
-        <defs>
-          <linearGradient id="stroke" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#0086d1"/><stop offset="1" stop-color="#5fd5ff"/></linearGradient>
-          <linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#00aeef" stop-opacity=".42"/><stop offset="1" stop-color="#00aeef" stop-opacity="0"/></linearGradient>
-        </defs>
-        <path id="chartArea" fill="url(#fill)"/>
-        <path id="chartLine" fill="none" stroke="url(#stroke)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-      </svg>
+  <main class="view" id="settings">
+    <nav class="card subnav" aria-label="Settings">
+      <button data-page="envs">Environments</button>
+      <button data-page="templates">Templates</button>
+      <button data-page="presets">Presets</button>
+      <button data-page="monitors">Reject queues</button>
+    </nav>
+    <section class="spage" id="sp-envs">
+      <div class="shead"><h2>Environments</h2><button class="btn primary" id="newEnv" data-icon="plus">Environment</button></div>
+      <div class="envs" id="envCards"></div>
     </section>
-
-    <div class="runs" id="runs"></div>
-  </aside>
+    <section class="spage" id="sp-templates">
+      <div class="shead"><h2>Templates</h2><div class="acts"><button class="btn" id="pasteBtn">Paste a message</button><button class="btn primary" id="newTpl" data-icon="plus">Template</button></div></div>
+      <div class="tpls">
+        <div class="card tlist">
+          <div id="packs"></div>
+          <button class="add" id="newPack">+ Pack</button>
+        </div>
+        <div class="card ink editorcard">
+          <div class="head">
+            <div class="file" id="file"></div>
+            <span class="sp"></span>
+            <button class="ghost" id="insert" data-icon="braces" aria-haspopup="true" aria-expanded="false">Insert</button>
+            <button class="ghost" id="recognise" data-icon="wand" title="Find the values that should differ per message" aria-label="Find the values that should differ per message"></button>
+            <button class="ghost" id="deleteTemplate" data-icon="trash" title="Delete template" aria-label="Delete template"></button>
+            <button class="btn" id="save" disabled>Save <kbd>⌘S</kbd></button>
+          </div>
+          <div class="editor">
+            <div class="gutter" id="gutter" aria-hidden="true"></div>
+            <div class="stack">
+              <pre class="src" id="hl" aria-hidden="true"></pre>
+              <textarea class="src" id="src" spellcheck="false" wrap="off" aria-label="Template source. Tab indents; press Escape, then Tab, to leave the editor."></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="spage" id="sp-presets">
+      <div class="shead"><h2>Presets</h2><button class="btn primary" id="newPreset" data-icon="plus">Preset</button></div>
+      <div class="card big" id="presetTable"></div>
+    </section>
+    <section class="spage" id="sp-monitors">
+      <div class="shead"><h2>Reject queues</h2><button class="btn primary" id="newMonitor" data-icon="plus">Queue</button></div>
+      <div class="card big" id="monitorTable"></div>
+    </section>
+  </main>
 </div>
 
-<dialog class="modal" id="settings" aria-labelledby="settingsTitle">
-  <div class="mhead"><h2 id="settingsTitle">Connections</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
-  <div class="split">
-    <div class="mlist">
-      <div id="connList"></div>
-      <button type="button" class="btn" id="newConn" data-icon="plus">New connection</button>
-    </div>
-    <form class="mform" id="connForm">
-      <div class="two">
-        <label class="field"><span>Name</span><input id="cName" required autocomplete="off"></label>
-        <label class="field"><span>Type</span><select id="cType"></select></label>
-      </div>
-      <div class="two" id="cFields"></div>
-      <div class="field">
-        <span>Destinations</span>
-        <div class="chiprow" id="cDests"><input id="cDestInput" placeholder="Queue or topic, then Enter" autocomplete="off" aria-label="Add destination"></div>
-      </div>
-      <div class="result" id="cResult" hidden></div>
-      <div class="mfoot">
-        <button type="button" class="btn danger" id="cDelete">Delete</button>
-        <span class="grow"></span>
-        <button type="button" class="btn" id="cTest">Test connection</button>
-        <button class="btn primary">Save</button>
-      </div>
-    </form>
+<datalist id="queues"></datalist>
+
+<dialog class="modal" id="pasteDialog" aria-labelledby="pasteTitle">
+  <div class="mhead"><h2 id="pasteTitle">New template from a message</h2><span class="sp"></span><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <div class="dsplit">
+    <div><h4><label for="paste">Paste</label></h4><textarea id="paste" spellcheck="false" wrap="off"></textarea></div>
+    <div><h4>Template</h4><div class="out ink code" id="recog"></div></div>
   </div>
+  <form class="dfoot" id="pasteForm">
+    <span class="found" id="found" role="status"></span><span class="sp"></span>
+    <label class="inp" id="pastePackBox"><span>Pack</span><select id="pastePack"></select></label>
+    <label class="inp"><span>Name</span><input id="pasteName" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" autocomplete="off" placeholder="order.json"></label>
+    <button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save template</button>
+  </form>
 </dialog>
 
-<dialog class="modal narrow" id="packDialog" aria-labelledby="packTitle">
-  <div class="mhead"><h2 id="packTitle">Pack</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
-  <form class="mform" id="packForm">
-    <div class="two">
-      <label class="field"><span>Name</span><input id="pName" required autocomplete="off"></label>
-      <label class="field"><span>Folder</span><input id="pId" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" autocomplete="off"></label>
+<dialog class="modal narrow" id="connDialog" aria-labelledby="connTitle">
+  <div class="mhead"><h2 id="connTitle">Environment</h2><span class="sp"></span><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <form class="mform" id="connForm">
+    <div class="grid2">
+      <label class="inp"><span>Name</span><input id="cName" required autocomplete="off"></label>
+      <label class="inp"><span>Type</span><select id="cType"></select></label>
     </div>
-    <div>
-      <div class="fhead"><span>Fields</span><button type="button" class="btn ghost" id="pAdd" data-icon="plus">Add field</button></div>
-      <div id="pFields"></div>
+    <div class="grid2" id="cFields"></div>
+    <div class="inp">
+      <span>Queues</span>
+      <div class="chiprow" id="cDests"><input id="cDestInput" placeholder="Queue or topic, then Enter" autocomplete="off" aria-label="Add a queue"></div>
     </div>
+    <div class="result" id="cResult" hidden></div>
     <div class="mfoot">
-      <button type="button" class="btn danger" id="pDelete">Delete pack</button>
-      <span class="grow"></span>
+      <button type="button" class="btn danger" id="cDelete">Delete</button>
+      <span class="sp"></span>
+      <button type="button" class="btn" id="cTest">Test</button>
       <button class="btn primary">Save</button>
     </div>
   </form>
 </dialog>
 
-<dialog class="modal narrow" id="scenarioDialog" aria-labelledby="scTitle">
-  <div class="mhead"><h2 id="scTitle">Scenario</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
-  <form class="mform" id="scForm">
-    <label class="field"><span>Name</span><input id="scName" required autocomplete="off"></label>
-    <div>
-      <div class="fhead"><span>Templates</span><button type="button" class="btn ghost" id="scAddPart" data-icon="plus">Template</button></div>
-      <div id="scParts"></div>
+<dialog class="modal narrow" id="packDialog" aria-labelledby="packTitle">
+  <div class="mhead"><h2 id="packTitle">Pack</h2><span class="sp"></span><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <form class="mform" id="packForm">
+    <div class="grid2">
+      <label class="inp"><span>Name</span><input id="pName" required autocomplete="off"></label>
+      <label class="inp"><span>Folder</span><input id="pId" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" autocomplete="off"></label>
     </div>
     <div>
-      <div class="fhead"><span>Targets</span><button type="button" class="btn ghost" id="scAddTarget" data-icon="plus">Target</button></div>
-      <div id="scTargets"></div>
-    </div>
-    <div class="seg" id="scMode" hidden>
-      <button type="button" data-mode="spread" title="Each message goes to the next target in turn">Spread</button>
-      <button type="button" data-mode="all" title="Every message goes to every target">Copy to all</button>
-    </div>
-    <div class="two">
-      <label class="field"><span>Messages</span><input id="scCount" type="number" min="0" max="1000000000" required></label>
-      <label class="field"><span>Per second</span><input id="scRate" type="number" min="0" step="any" title="0 sends as fast as possible"></label>
-    </div>
-    <div class="four">
-      <label class="field"><span>Ramp-up (s)</span><input id="scRampUp" type="number" min="0" max="86400" placeholder="0"></label>
-      <label class="field"><span>Duration (s)</span><input id="scDuration" type="number" min="0" max="604800" placeholder="none"></label>
-      <label class="field"><span>Senders</span><input id="scSenders" type="number" min="0" max="64" placeholder="1" title="0 adds senders while the run falls behind its rate"></label>
-      <label class="field"><span>Seed</span><input id="scSeed" type="number" min="0" step="1" placeholder="random" title="The same seed repeats the same messages and faults"></label>
-    </div>
-    <button type="button" class="btn hold" id="scUnlimited" aria-pressed="false" title="No count and no duration: the run goes on until it is cancelled">Until stopped</button>
-    <label class="field"><span>Headers</span><input id="scHeaders" placeholder="JMSCorrelationID={{uuid}}" autocomplete="off"></label>
-    <div class="two" id="scVerify" hidden>
-      <label class="field"><span>Timeout (s)</span><input id="scTimeout" type="number" min="1" max="600" required></label>
-      <label class="field"><span>Match</span><input id="scMatch" placeholder="{{uuid}}" autocomplete="off" title="What identifies a message when it arrives. Empty uses the first uuid or id in the body."></label>
-    </div>
-    <div>
-      <label class="field slide"><span>Invalid <output id="scInvalidOut" for="scInvalidPercent">0%</output></span><input id="scInvalidPercent" type="range" min="0" max="100" step="1" value="0"></label>
-      <div id="scInvalid" hidden>
-        <div class="kinds" id="scInvalidKinds" role="group" aria-label="Kinds of invalid message"></div>
-        <div class="trow erow" id="scInvalidExpect"></div>
-      </div>
-    </div>
-    <div>
-      <div class="fhead"><span>Watch</span><button type="button" class="btn ghost" id="scAddWatch" data-icon="plus">Destination</button></div>
-      <div id="scWatches"></div>
-      <p class="note" id="scWatchNote" hidden>Receiving takes the messages off a queue.</p>
+      <div class="row"><h4>Fields</h4><button type="button" class="ghost" id="pAdd" data-icon="plus">Field</button></div>
+      <div id="pFields"></div>
     </div>
     <div class="mfoot">
-      <button type="button" class="btn danger" id="scDelete">Delete</button>
-      <span class="grow"></span>
-      <button type="button" class="btn" id="scRun" data-icon="send">Save and run</button>
+      <button type="button" class="btn danger" id="pDelete">Delete pack</button>
+      <span class="sp"></span>
       <button class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="modal narrow" id="monitorDialog" aria-labelledby="monitorTitle">
+  <div class="mhead"><h2 id="monitorTitle">Watch a queue</h2><span class="sp"></span><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
+  <form class="mform" id="monitorForm">
+    <div class="grid2">
+      <label class="inp"><span>Environment</span><select id="mConn" required></select></label>
+      <label class="inp"><span>Queue</span><input id="mDest" list="mDests" required autocomplete="off"><datalist id="mDests"></datalist></label>
+    </div>
+    <div class="inp">
+      <span>Group by</span>
+      <div class="chiprow" id="mBuckets"></div>
+    </div>
+    <label class="inp"><span>Name</span><input id="mName" maxlength="80" autocomplete="off"></label>
+    <p class="note">Receiving takes the messages off a queue.</p>
+    <div class="mfoot">
+      <button type="button" class="switch" id="mSave" role="switch" aria-checked="true" title="Keep it in msgforge.json: it then starts with msgforge"><i class="t"></i>Saved</button>
+      <span class="sp"></span><button class="btn primary">Start</button>
     </div>
   </form>
 </dialog>
 
 <dialog class="modal wide" id="detail" aria-labelledby="detailTitle">
   <div class="mhead">
-    <h2 id="detailTitle"></h2><span class="chip" id="detailChip"></span>
-    <span class="grow"></span>
+    <h2 id="detailTitle"></h2><span class="verdict" id="detailChip"></span>
+    <span class="sp"></span>
     <div class="acts" id="detailActs"></div>
     <button class="iconbtn" data-close data-icon="x" aria-label="Close"></button>
   </div>
   <div class="dbody" id="detailBody"></div>
 </dialog>
 
-<dialog class="modal narrow" id="monitorDialog" aria-labelledby="monitorTitle">
-  <div class="mhead"><h2 id="monitorTitle">New monitor</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
-  <form class="mform" id="monitorForm">
-    <div class="two">
-      <label class="field"><span>Connection</span><select id="mConn" required></select></label>
-      <label class="field"><span>Destination</span><input id="mDest" list="mDests" required autocomplete="off" placeholder="ORDERS.REJECTED"><datalist id="mDests"></datalist></label>
-    </div>
-    <div class="field">
-      <span>Bucket by</span>
-      <div class="chiprow" id="mBuckets"><input id="mBucketInput" placeholder="/reason, header:name or a regular expression, then Enter" autocomplete="off" aria-label="Add a bucket"></div>
-    </div>
-    <label class="field"><span>Name</span><input id="mName" maxlength="80" autocomplete="off" placeholder="Rejected"></label>
-    <p class="note">Receiving takes the messages off a queue.</p>
-    <div class="mfoot">
-      <button type="button" class="btn hold" id="mSave" aria-pressed="false" title="Keep it in msgforge.json: it then starts with msgforge">Saved</button>
-      <span class="grow"></span><button class="btn primary" data-icon="eye">Start</button>
-    </div>
-  </form>
-</dialog>
-
-<dialog class="modal narrow" id="reportsDialog" aria-labelledby="reportsTitle">
-  <div class="mhead"><h2 id="reportsTitle">Saved reports</h2><button class="iconbtn" data-close data-icon="x" aria-label="Close"></button></div>
-  <div class="dbody" id="reportsBody"></div>
-</dialog>
-
 <dialog class="modal tiny" id="ask" aria-labelledby="askTitle">
   <form class="ask" id="askForm">
     <h2 id="askTitle"></h2>
     <p id="askText"></p>
-    <label class="field" id="askField"><span id="askLabel"></span><input id="askInput" autocomplete="off"></label>
-    <div class="mfoot"><span class="grow"></span><button type="button" class="btn" id="askCancel">Cancel</button><button class="btn primary" id="askOk">OK</button></div>
+    <label class="inp" id="askField"><span id="askLabel"></span><input id="askInput" autocomplete="off"></label>
+    <div class="mfoot"><span class="sp"></span><button type="button" class="btn" id="askCancel">Cancel</button><button class="btn primary" id="askOk">OK</button></div>
   </form>
 </dialog>
 
-<input type="file" id="importFile" multiple hidden>
-<div class="menu" id="menu" hidden></div>
+<div class="menu" id="insertMenu" hidden></div>
 <div id="toast" role="status"></div>
 <script src="app.js"></script>
 </body>
